@@ -9,6 +9,7 @@ router.post('/', authenticateToken, checkRole('buyer'), demandController.createD
 
 // ดึงความต้องการทั้งหมดของผู้ซื้อ
 router.get('/', authenticateToken, checkRole('buyer'), demandController.getDemandsByBuyer);
+router.get('/products', authenticateToken, checkRole('buyer'), demandController.getProductOptions);
 
 // ลบความต้องการ
 router.delete('/:id', authenticateToken, checkRole('buyer'), demandController.deleteDemand);
