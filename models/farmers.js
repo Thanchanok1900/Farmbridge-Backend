@@ -1,0 +1,40 @@
+const { DataTypes } = require('sequelize');
+
+module.exports = (sequelize) => {
+  const Farmers = sequelize.define('Farmers', {
+    fullname: {
+      type: DataTypes.STRING(100),
+      allowNull: false
+    },
+    email: {
+      type: DataTypes.STRING(100),
+      allowNull: false,
+      unique: true
+    },
+    password_hash: {
+      type: DataTypes.TEXT,
+      allowNull: false
+    },
+    phone: DataTypes.STRING(20),
+    address: DataTypes.TEXT,
+    location_geom: DataTypes.GEOMETRY('POINT', 4326), // ใช้แทน GEOGRAPHY(Point,4326)
+    farmer_doc_url: DataTypes.TEXT,
+    is_active: {
+      type: DataTypes.BOOLEAN,
+      defaultValue: true
+    },
+    created_at: {
+      type: DataTypes.DATE,
+      defaultValue: DataTypes.NOW
+    },
+    updated_at: {
+      type: DataTypes.DATE,
+      defaultValue: DataTypes.NOW
+    }
+  }, {
+    tableName: 'farmers',
+    timestamps: false
+  });
+
+  return Farmers;
+};

@@ -1,0 +1,39 @@
+const { DataTypes } = require('sequelize');
+
+module.exports = (sequelize) => {
+  const Buyers = sequelize.define('Buyers', {
+    fullname: {
+      type: DataTypes.STRING(100),
+      allowNull: false
+    },
+    email: {
+      type: DataTypes.STRING(100),
+      allowNull: false,
+      unique: true
+    },
+    password_hash: {
+      type: DataTypes.TEXT,
+      allowNull: false
+    },
+    phone: DataTypes.STRING(20),
+    address: DataTypes.TEXT,
+    location_geom: DataTypes.GEOMETRY('POINT', 4326),
+    is_active: {
+      type: DataTypes.BOOLEAN,
+      defaultValue: true
+    },
+    created_at: {
+      type: DataTypes.DATE,
+      defaultValue: DataTypes.NOW
+    },
+    updated_at: {
+      type: DataTypes.DATE,
+      defaultValue: DataTypes.NOW
+    }
+  }, {
+    tableName: 'buyers',
+    timestamps: false
+  });
+
+  return Buyers;
+};
