@@ -3,6 +3,7 @@ const Demands = db.Demands;
 const Listings = db.Listings;
 const Notifications = db.Notifications;
 const { Op } = require('sequelize');
+const { geocodeAddress } = require('../utils/geocode');
 
 // สร้างความต้องการใหม่
 exports.createDemand = async (req, res) => {
@@ -14,12 +15,24 @@ exports.createDemand = async (req, res) => {
       return res.status(400).json({ message: 'กรุณาระบุชื่อสินค้า จำนวน และหน่วย' });
     }
 
+    const buyer = await db.Buyers.findByPk(buyer_id); // ดึงข้อมูลผู้ซื้อ
+    let location_geom = null;
+
+    if (buyer && buyer.address) {
+      const coords = await geocodeAddress(buyer.address); // ฟังก์ชันที่คุณมีอยู่
+      if (coords) {
+        location_geom = { type: 'Point', coordinates: [coords.lng, coords.lat] };
+      }
+    }
+
+
     const demand = await db.Demands.create({
       buyer_id,
       product_name,
       desired_quantity,
       unit,
-      desired_price
+      desired_price,
+      location_geom
     });
 
     // ตรวจสอบ listings ที่ตรงกัน
