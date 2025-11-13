@@ -10,7 +10,9 @@ router.get('/market-suggestion', listingController.marketSuggestion);
 
 // public
 router.get('/', listingController.getAll);
+router.get('/my-listings',authenticateToken, checkRole('farmer'), listingController.getMyListings);
 router.get('/:id', listingController.getById);
+
 
 // protected (farmer only)
 router.post('/', authenticateToken, checkRole('farmer'), listingController.create);

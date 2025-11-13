@@ -6,7 +6,7 @@ const { geocodeAddress } = require('../utils/geocode');
 const { Op } = require('sequelize');
 
 // ✅ รายการสินค้าและเกรดที่อนุญาต (ใช้ dropdown)
-const allowedProducts = ['มะม่วง', 'มังคุด', 'ทุเรียน',  'องุ่น'];
+const allowedProducts = ['มะม่วง', 'มังคุด', 'ทุเรียน', 'องุ่น'];
 const allowedGrades = ['เกรด A', 'เกรด B', 'เกรด C'];
 
 // GET all listings (optional filters: product_name, status)
@@ -15,16 +15,15 @@ exports.getAll = async (req, res) => {
     const { product_name, status } = req.query;
     const where = {};
 
-    // ✅ dropdown ส่งค่าชัดเจนแล้ว ใช้เท่ากับแทน iLike
     if (product_name) where.product_name = product_name;
     if (status) where.status = status;
 
     const rows = await Listings.findAll({
       where,
       include: [
-        { model: Farmers, as: 'seller', attributes: ['id','fullname','email','phone','address'] }
+        { model: Farmers, as: 'seller', attributes: ['id', 'fullname', 'email', 'phone', 'address'] }
       ],
-      order: [['created_at','DESC']]
+      order: [['created_at', 'DESC']] // <-- สมมติว่าแก้ปัญหา column นี้แล้ว
     });
 
     res.json(rows);
@@ -34,13 +33,49 @@ exports.getAll = async (req, res) => {
   }
 };
 
+
+// GET all listings for the *currently logged-in farmer*
+exports.getMyListings = async (req, res) => {
+  try {
+    // 1. ดึงข้อมูลผู้ใช้ที่ login อยู่ (จาก authMiddleware)
+    const identity = req.identity;
+
+    // 2. (ลบการตรวจสอบ Role ออกแล้ว เพราะ Routes จัดการให้)
+
+    const { product_name, status } = req.query;
+
+    // 3. สร้างเงื่อนไข "where" โดยบังคับว่า seller_id ต้องเป็น ID ของคนที่ login
+    const where = {
+      seller_id: identity.id
+    };
+
+    // 4. เพิ่ม filter (ถ้ามี)
+    if (product_name) where.product_name = product_name;
+    if (status) where.status = status;
+
+    // 5. ค้นหาแบบเดียวกับ getAll
+    const rows = await Listings.findAll({
+      where,
+      include: [
+        { model: Farmers, as: 'seller', attributes: ['id', 'fullname', 'email', 'phone', 'address'] }
+      ],
+      order: [['created_at', 'DESC']]
+    });
+
+    res.json(rows);
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ message: 'Failed to fetch your listings', error: err.message });
+  }
+};
+
 // GET listing by id
 exports.getById = async (req, res) => {
   try {
     const { id } = req.params;
     const listing = await Listings.findByPk(id, {
       include: [
-        { model: Farmers, as: 'seller', attributes: ['id','fullname','email','phone','address'] }
+        { model: Farmers, as: 'seller', attributes: ['id', 'fullname', 'email', 'phone', 'address'] }
       ]
     });
     if (!listing) return res.status(404).json({ message: 'Listing not found' });
@@ -54,8 +89,7 @@ exports.getById = async (req, res) => {
 exports.create = async (req, res) => {
   try {
     const identity = req.identity;
-    if (!identity || identity.role !== 'farmer')
-      return res.status(403).json({ message: 'Only farmers can create listings' });
+    // (ลบการตรวจสอบ Role ออกแล้ว เพราะ Routes จัดการให้)
 
     const {
       product_name, grade, quantity_total, price_per_unit,
@@ -140,7 +174,10 @@ exports.update = async (req, res) => {
     const listing = await Listings.findByPk(id);
 
     if (!listing) return res.status(404).json({ message: 'Listing not found' });
-    if (identity.role !== 'farmer' || Number(listing.seller_id) !== Number(identity.id)) {
+
+    // ✅ (ลบ Role check ออก)
+    // ✅ (คงเหลือการเช็ก "ความเป็นเจ้าของ" ไว้)
+    if (Number(listing.seller_id) !== Number(identity.id)) {
       return res.status(403).json({ message: 'Not authorized to update this listing' });
     }
 
@@ -220,7 +257,9 @@ exports.remove = async (req, res) => {
     const listing = await Listings.findByPk(id);
     if (!listing) return res.status(404).json({ message: 'Listing not found' });
 
-    if (identity.role !== 'farmer' || Number(listing.seller_id) !== Number(identity.id)) {
+    // ✅ (ลบ Role check ออก)
+    // ✅ (คงเหลือการเช็ก "ความเป็นเจ้าของ" ไว้)
+    if (Number(listing.seller_id) !== Number(identity.id)) {
       return res.status(403).json({ message: 'Not authorized to delete this listing' });
     }
 
@@ -245,7 +284,7 @@ exports.marketSuggestion = async (req, res) => {
     const rows = await Listings.findAll({
       where: {
         product_name: product_name, // ✅ เท่ากับแทน iLike
-        created_at: { [Op.gte]: since },
+        created_at: { [Op.gte]: since }, // <-- สมมติว่าแก้ปัญหา column นี้แล้ว
         price_per_unit: { [Op.ne]: null }
       },
       attributes: ['price_per_unit', 'created_at']
