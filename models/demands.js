@@ -37,6 +37,5 @@ Demands.associate = (models) => {
   Demands.hasMany(models.Matches, { foreignKey: 'demand_id' });
 };
 
-
   return Demands;
 };
