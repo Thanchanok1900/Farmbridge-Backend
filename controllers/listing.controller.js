@@ -6,340 +6,314 @@ const { geocodeAddress } = require('../utils/geocode');
 const { Op } = require('sequelize');
 const { haversineDistance } = require('../utils/distance');
 
-// ✅ รายการสินค้าและเกรดที่อนุญาต (ใช้ dropdown)
+//  รายการสินค้าและเกรดที่อนุญาต (ใช้ dropdown)
 const allowedProducts = ['มะม่วง', 'มังคุด', 'ทุเรียน', 'องุ่น'];
 const allowedGrades = ['เกรด B', 'เกรด C', 'เกรดต่ำกว่า C'];
 
-// GET all listings (optional filters: product_name, status)
+// GET all listings (ถูกต้อง)
 exports.getAll = async (req, res) => {
-  try {
-    const { product_name, status } = req.query;
-    const where = {};
-
-    if (product_name) where.product_name = product_name.trim();
-    if (status) where.status = status.trim();
-
-    const rows = await Listings.findAll({
-      where,
-      include: [
-        { model: Farmers, as: 'seller', attributes: ['id', 'fullname', 'email', 'phone', 'address'] }
-      ],
-      order: [['created_at', 'DESC']] // <-- สมมติว่าแก้ปัญหา column นี้แล้ว
-    });
-
-    res.json(rows);
-  } catch (err) {
-    console.error(err);
-    res.status(500).json({ message: 'Failed to fetch listings', error: err.message });
-  }
+  try {
+    const { product_name, status } = req.query;
+    const where = {};
+    if (product_name) where.product_name = product_name.trim();
+    if (status) where.status = status.trim();
+    const rows = await Listings.findAll({
+      where,
+      include: [
+        { model: Farmers, as: 'seller', attributes: ['id', 'fullname', 'email', 'phone', 'address'] }
+      ],
+      order: [['created_at', 'DESC']]
+    });
+    res.json(rows);
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ message: 'Failed to fetch listings', error: err.message });
+  }
 };
 
-
-// GET all listings for the *currently logged-in farmer*
+// GET all listings for current farmer (ถูกต้อง)
 exports.getMyListings = async (req, res) => {
-  try {
-    // 1. ดึงข้อมูลผู้ใช้ที่ login อยู่ (จาก authMiddleware)
-    const identity = req.identity;
-
-    // 2. (ลบการตรวจสอบ Role ออกแล้ว เพราะ Routes จัดการให้)
-
-    const { product_name, status } = req.query;
-
-    // 3. สร้างเงื่อนไข "where" โดยบังคับว่า seller_id ต้องเป็น ID ของคนที่ login
-    const where = {
-      seller_id: identity.id
-    };
-
-    // 4. เพิ่ม filter (ถ้ามี)
-    if (product_name) where.product_name = product_name.trim();
-    if (status) where.status = status.trim();
-
-    // 5. ค้นหาแบบเดียวกับ getAll
-    const rows = await Listings.findAll({
-      where,
-      include: [
-        { model: Farmers, as: 'seller', attributes: ['id', 'fullname', 'email', 'phone', 'address'] }
-      ],
-      order: [['created_at', 'DESC']]
-    });
-
-    res.json(rows);
-  } catch (err) {
-    console.error(err);
-    res.status(500).json({ message: 'Failed to fetch your listings', error: err.message });
-  }
+  try {
+    const identity = req.identity;
+    const { product_name, status } = req.query;
+    const where = { seller_id: identity.id };
+    if (product_name) where.product_name = product_name.trim();
+    if (status) where.status = status.trim();
+    const rows = await Listings.findAll({
+      where,
+      include: [
+        { model: Farmers, as: 'seller', attributes: ['id', 'fullname', 'email', 'phone', 'address'] }
+      ],
+      order: [['created_at', 'DESC']]
+    });
+    res.json(rows);
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ message: 'Failed to fetch your listings', error: err.message });
+  }
 };
 
-// GET listing by id
+// GET listing by id (ถูกต้อง)
 exports.getById = async (req, res) => {
-  try {
-    const { id } = req.params;
-    const listing = await Listings.findByPk(id, {
-      include: [
-        { model: Farmers, as: 'seller', attributes: ['id', 'fullname', 'email', 'phone', 'address'] }
-      ]
-    });
-    if (!listing) return res.status(404).json({ message: 'Listing not found' });
-    res.json(listing);
-  } catch (err) {
-    res.status(500).json({ message: 'Error', error: err.message });
-  }
+  try {
+    const { id } = req.params;
+    const listing = await Listings.findByPk(id, {
+      include: [
+        { model: Farmers, as: 'seller', attributes: ['id', 'fullname', 'email', 'phone', 'address'] }
+      ]
+    });
+    if (!listing) return res.status(404).json({ message: 'Listing not found' });
+    res.json(listing);
+  } catch (err) {
+    res.status(500).json({ message: 'Error', error: err.message });
+  }
 };
 
 // CREATE listing (เฉพาะเกษตรกร)
 exports.create = async (req, res) => {
-  try {
-    const farmer_id = req.identity.id;
-    let { product_name, grade, quantity_total, price_per_unit, pickup_date, description, image_urls, unit } = req.body;
+  try {
+    const farmer_id = req.identity.id;
+    let { product_name, grade, quantity_total, price_per_unit, pickup_date, description, image_urls, unit } = req.body;
 
-    // ตรวจสอบค่า product_name
-    if (!allowedProducts.includes(product_name)) {
-      return res.status(400).json({ message: 'ชื่อสินค้าที่เลือกไม่ถูกต้อง' });
-    }
+    if (!allowedProducts.includes(product_name)) {
+      return res.status(400).json({ message: 'ชื่อสินค้าที่เลือกไม่ถูกต้อง' });
+    }
+    if (grade && !allowedGrades.includes(grade)) {
+      return res.status(400).json({ message: 'เกรดสินค้าที่เลือกไม่ถูกต้อง' });
+    }
 
-    // ตรวจสอบค่า grade (ถ้ามี)
-    if (grade && !allowedGrades.includes(grade)) {
-      return res.status(400).json({ message: 'เกรดสินค้าที่เลือกไม่ถูกต้อง' });
-    }
+    // แก้ไข: แปลง String เป็น Number ก่อน
+    const qty = parseFloat(quantity_total);
+    const price = parseFloat(price_per_unit);
 
-    if (!quantity_total || !price_per_unit || !pickup_date) {
-      return res.status(400).json({ message: 'Missing required fields' });
-    }
+    if (!qty || !price || !pickup_date) {
+      return res.status(400).json({ message: 'Missing or invalid required fields (quantity, price, pickup_date)' });
+    }
 
-    // ใช้ location จาก farmer
-    const farmer = await Farmers.findByPk(farmer_id);
-    let location_geom = null;
+    const farmer = await Farmers.findByPk(farmer_id);
+    let location_geom = null;
+    if (farmer && farmer.address) {
+      const coords = await geocodeAddress(farmer.address);
+      if (coords) location_geom = { type: 'Point', coordinates: [coords.lng, coords.lat] };
+    }
 
-    if (farmer && farmer.address) {
-      const coords = await geocodeAddress(farmer.address);
-      if (coords) location_geom = { type: 'Point', coordinates: [coords.lng, coords.lat] };
-    }
+    // CREATE LISTING
+    const listing = await Listings.create({
+      seller_id: farmer_id,
+      product_name,
+      grade: grade || null,
+      quantity_total: qty, //  ใช้ Number
+      quantity_available: qty, //  ใช้ Number
+      unit,
+      price_per_unit: price, // ใช้ Number
+      pickup_date,
+      description: description || null,
+      image_url: image_urls,
+      status: 'available',
+      location_geom
+    });
 
-    // CREATE LISTING
-    const listing = await Listings.create({
-      seller_id: farmer_id,
-      product_name,
-      grade: grade || null,
-      quantity_total,
-      quantity_available: quantity_total,
-      unit,
-      price_per_unit,
-      pickup_date,
-      description: description || null,
-      image_url: image_urls,
-      status: 'available',
-      location_geom
-    });
+    // --- Match และแจ้งเตือนผู้ซื้อ ---
+    const demands = await db.Demands.findAll({
+      where: {
+        product_name,
+        desired_quantity: { [Op.lte]: qty }, //  ใช้ Number
+        status: 'open'
+      }
+    });
 
-    // --- Match และแจ้งเตือนผู้ซื้อเหมือนเดิม ---
-    const demands = await db.Demands.findAll({
-      where: {
-        product_name,
-        desired_quantity: { [Op.lte]: quantity_total },
-        status: 'open'
+    const notifyList = [];
+    for (const d of demands) {
+      let buyerCoords = null;
+      if (d.location_geom) {
+        buyerCoords = { lat: d.location_geom.coordinates[1], lng: d.location_geom.coordinates[0] };
+      }
+      let distance_km = null;
+      if (buyerCoords && location_geom) {
+        distance_km = haversineDistance(
+          buyerCoords.lat, buyerCoords.lng,
+          location_geom.coordinates[1], location_geom.coordinates[0]
+        );
+      }
+      notifyList.push({ demand: d, distance_km });
+    }
+
+    notifyList.sort((a, b) => {
+      if (a.distance_km === null) return 1;
+      if (b.distance_km === null) return -1;
+      return a.distance_km - b.distance_km;
+    });
+
+    const emitToUser = req.app.locals.emitToUser;
+
+    for (const item of notifyList) {
+      await db.Matches.create({
+        listing_id: listing.id,
+        demand_id: item.demand.id,
+        distance_km: item.distance_km,
+        matched_price: price, //  ใช้ Number
+        status: 'pending'
+      });
+
+      const notif = await db.Notifications.create({
+        user_id: item.demand.buyer_id,
+        type: 'match',
+        message: `มีสินค้าที่ตรงกับความต้องการ: ${product_name}`
+      });
+
+      if (emitToUser) {
+        emitToUser(item.demand.buyer_id, 'notification', {
+            id: notif.id,
+            listing: listing,
+            distance_km: item.distance_km
+          });
       }
-    });
+    }
 
-    const notifyList = [];
+    res.status(201).json({ message: 'Listing created', listing });
 
-    for (const d of demands) {
-      let buyerCoords = null;
-      if (d.location_geom) {
-        buyerCoords = {
-          lat: d.location_geom.coordinates[1],
-          lng: d.location_geom.coordinates[0]
-        };
-      }
-
-      let distance_km = null;
-      if (buyerCoords && location_geom) {
-        distance_km = haversineDistance(
-          buyerCoords.lat,
-          buyerCoords.lng,
-          location_geom.coordinates[1],
-          location_geom.coordinates[0]
-        );
-      }
-
-      notifyList.push({ demand: d, distance_km });
-    }
-
-    notifyList.sort((a, b) => {
-      if (a.distance_km === null) return 1;
-      if (b.distance_km === null) return -1;
-      return a.distance_km - b.distance_km;
-    });
-
-    const emitToUser = req.app.locals.emitToUser;
-
-    for (const item of notifyList) {
-      await db.Matches.create({
-        listing_id: listing.id,
-        demand_id: item.demand.id,
-        distance_km: item.distance_km,
-        matched_price: listing.price_per_unit,
-        status: 'pending'
-      });
-
-      const notif = await db.Notifications.create({
-        user_id: item.demand.buyer_id,
-        type: 'match',
-        message: `มีสินค้าที่ตรงกับความต้องการ: ${product_name}`
-      });
-
-      emitToUser(item.demand.buyer_id, 'notification', {
-        id: notif.id,
-        listing: listing,
-        distance_km: item.distance_km
-      });
-    }
-
-    res.status(201).json({ message: 'Listing created', listing });
-
-  } catch (err) {
-    console.error(err);
-    res.status(500).json({ message: 'Create listing failed', error: err.message });
-  }
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ message: 'Create listing failed', error: err.message });
+  }
 };
 
 // UPDATE listing (เฉพาะเกษตรกรเจ้าของ listing)
 exports.update = async (req, res) => {
-  try {
-    const { id } = req.params;
-    const identity = req.identity;
-    const listing = await Listings.findByPk(id);
+  try {
+    const { id } = req.params;
+    const identity = req.identity;
+    const listing = await Listings.findByPk(id);
 
-    if (!listing) return res.status(404).json({ message: 'Listing not found' });
+    if (!listing) return res.status(404).json({ message: 'Listing not found' });
+    if (Number(listing.seller_id) !== Number(identity.id)) {
+      return res.status(403).json({ message: 'Not authorized to update this listing' });
+  S }
 
-    if (Number(listing.seller_id) !== Number(identity.id)) {
-      return res.status(403).json({ message: 'Not authorized to update this listing' });
-    }
+    let { product_name, grade, quantity_total, price_per_unit, pickup_date, description, image_urls } = req.body;
+    const payload = {};
 
-    let { product_name, grade, quantity_total, price_per_unit, pickup_date, description, image_urls } = req.body;
+    if (product_name) {
+      if (!allowedProducts.includes(product_name)) {
+        return res.status(400).json({ message: 'ชื่อสินค้าที่เลือกไม่ถูกต้อง' });
+      }
+      payload.product_name = product_name;
+    }
+    if (grade) {
+      if (!allowedGrades.includes(grade)) {
+        return res.status(400).json({ message: 'เกรดสินค้าที่เลือกไม่ถูกต้อง' });
+      }
+      payload.grade = grade;
+    }
 
-    const payload = {};
+    if (quantity_total !== undefined) {
+      // ✅✅✅ แก้ไข: แปลง String เป็น Number ก่อน
+      const newQty = parseFloat(quantity_total);
+      if (isNaN(newQty) || newQty < 0) return res.status(400).json({ message: 'quantity_total ต้องเป็นตัวเลขบวก' });
 
-    if (product_name) {
-      if (!allowedProducts.includes(product_name)) {
-        return res.status(400).json({ message: 'ชื่อสินค้าที่เลือกไม่ถูกต้อง' });
-      }
-      payload.product_name = product_name;
-    }
+      // ✅✅✅ แก้ไข: แปลง String เป็น Number ก่อน
+      const diff = newQty - parseFloat(listing.quantity_total);
+      payload.quantity_total = newQty;
+      // ✅✅✅ แก้ไข: แปลง String เป็น Number ก่อน
+      payload.quantity_available = (parseFloat(listing.quantity_available) || 0) + diff;
+      if (payload.quantity_available < 0) payload.quantity_available = 0;
+    }
 
-    if (grade) {
-      if (!allowedGrades.includes(grade)) {
-        return res.status(400).json({ message: 'เกรดสินค้าที่เลือกไม่ถูกต้อง' });
-      }
-      payload.grade = grade;
-    }
+    if (price_per_unit !== undefined) {
+      // ✅✅✅ แก้ไข: แปลง String เป็น Number ก่อน
+      const newPrice = parseFloat(price_per_unit);
+      if (isNaN(newPrice) || newPrice < 0) return res.status(400).json({ message: 'price_per_unit ต้องเป็นตัวเลขบวก' });
+      payload.price_per_unit = newPrice;
+    }
 
-    if (quantity_total !== undefined) {
-      const newQty = parseFloat(quantity_total);
-      if (isNaN(newQty) || newQty < 0) return res.status(400).json({ message: 'quantity_total ต้องเป็นตัวเลขบวก' });
-      const diff = newQty - Number(listing.quantity_total);
-      payload.quantity_total = newQty;
-      payload.quantity_available = (Number(listing.quantity_available) || 0) + diff;
-      if (payload.quantity_available < 0) payload.quantity_available = 0;
-    }
+    if (pickup_date) payload.pickup_date = pickup_date;
+    if (description) payload.description = description;
 
-    if (price_per_unit !== undefined) {
-      const newPrice = parseFloat(price_per_unit);
-      if (isNaN(newPrice) || newPrice < 0) return res.status(400).json({ message: 'price_per_unit ต้องเป็นตัวเลขบวก' });
-      payload.price_per_unit = newPrice;
-    }
+    if (image_urls !== undefined) {
+      if (!Array.isArray(image_urls) || image_urls.length === 0) {
+        return res.status(400).json({ message: 'กรุณาใส่รูปสินค้าขึ้นไปอย่างน้อย 1 รูป' });
+      }
+      payload.image_url = image_urls;
+    }
 
-    if (pickup_date) payload.pickup_date = pickup_date;
-    if (description) payload.description = description;
+    // fallback location_geom
+    if (!listing.location_geom) {
+      const farmer = await Farmers.findByPk(identity.id);
+      if (farmer && farmer.address) {
+        const coords = await geocodeAddress(farmer.address);
+        if (coords) {
+          payload.location_geom = { type: 'Point', coordinates: [coords.lng, coords.lat] };
+        }
+      }
+    }
 
-    if (image_urls !== undefined) {
-      if (!Array.isArray(image_urls) || image_urls.length === 0) {
-        return res.status(400).json({ message: 'กรุณาใส่รูปสินค้าขึ้นไปอย่างน้อย 1 รูป' });
-      }
-      payload.image_url = image_urls;
-    }
+    await listing.update(payload);
 
-    // fallback location_geom
-    if (!listing.location_geom) {
-      const farmer = await Farmers.findByPk(identity.id);
-      if (farmer && farmer.address) {
-        const coords = await geocodeAddress(farmer.address);
-        if (coords) {
-          payload.location_geom = { type: 'Point', coordinates: [coords.lng, coords.lat] };
-        }
-      }
-    }
+    if (listing.quantity_available !== null && parseFloat(listing.quantity_available) <= 0) {
+      await listing.update({ status: 'sold_out' });
+    }
 
-    await listing.update(payload);
-
-    if (listing.quantity_available !== null && Number(listing.quantity_available) <= 0) {
-      await listing.update({ status: 'sold_out' });
-    }
-
-    res.json({ message: 'Listing updated', listing });
-  } catch (err) {
-    console.error(err);
-    res.status(500).json({ message: 'Update failed', error: err.message });
-  }
+    res.json({ message: 'Listing updated', listing });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ message: 'Update failed', error: err.message });
+  }
 };
 
-// DELETE listing
+// DELETE listing (ถูกต้อง)
 exports.remove = async (req, res) => {
-  try {
-    const { id } = req.params;
-    const identity = req.identity;
-    const listing = await Listings.findByPk(id);
-    if (!listing) return res.status(404).json({ message: 'Listing not found' });
-
-    // ✅ (ลบ Role check ออก)
-    // ✅ (คงเหลือการเช็ก "ความเป็นเจ้าของ" ไว้)
-    if (Number(listing.seller_id) !== Number(identity.id)) {
-      return res.status(403).json({ message: 'Not authorized to delete this listing' });
-    }
-
-    await listing.destroy();
-    res.json({ message: 'Listing deleted' });
-  } catch (err) {
-    console.error(err);
-    res.status(500).json({ message: 'Delete failed', error: err.message });
-  }
+  try {
+    const { id } = req.params;
+    const identity = req.identity;
+    const listing = await Listings.findByPk(id);
+    if (!listing) return res.status(404).json({ message: 'Listing not found' });
+    if (Number(listing.seller_id) !== Number(identity.id)) {
+      return res.status(403).json({ message: 'Not authorized to delete this listing' });
+    }
+    await listing.destroy();
+    res.json({ message: 'Listing deleted' });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ message: 'Delete failed', error: err.message });
+  }
 };
 
-// Market price suggestion
+// Market price suggestion (ถูกต้อง)
 exports.marketSuggestion = async (req, res) => {
-  try {
-    const { product_name, days = 7 } = req.query;
-    if (!product_name)
-      return res.status(400).json({ message: 'product_name is required' });
+  try {
+    const { product_name, days = 7 } = req.query;
+    if (!product_name)
+      return res.status(400).json({ message: 'product_name is required' });
 
-    const since = new Date();
-    since.setDate(since.getDate() - Number(days));
+    const since = new Date();
+    since.setDate(since.getDate() - Number(days));
 
-    const rows = await Listings.findAll({
-      where: {
-        product_name: product_name, // ✅ เท่ากับแทน iLike
-        created_at: { [Op.gte]: since }, // <-- สมมติว่าแก้ปัญหา column นี้แล้ว
-        price_per_unit: { [Op.ne]: null }
-      },
-      attributes: ['price_per_unit', 'created_at']
-    });
+    const rows = await Listings.findAll({
+      where: {
+        product_name: product_name,
+        created_at: { [Op.gte]: since },
+        price_per_unit: { [Op.ne]: null }
+      },
+      attributes: ['price_per_unit', 'created_at']
+    });
 
-    if (!rows || rows.length === 0)
-      return res.json({ message: 'No recent trades found', count: 0, avg: null });
+    if (!rows || rows.length === 0)
+      return res.json({ message: 'No recent trades found', count: 0, avg: null });
 
-    const prices = rows.map(r => Number(r.price_per_unit));
-    const avg = prices.reduce((a, b) => a + b, 0) / prices.length;
-    const min = Math.min(...prices);
-    const max = Math.max(...prices);
+    const prices = rows.map(r => Number(r.price_per_unit));
+    const avg = prices.reduce((a, b) => a + b, 0) / prices.length;
+    const min = Math.min(...prices);
+    const max = Math.max(...prices);
 
-    res.json({
-      count: prices.length,
-      avg: Number(avg.toFixed(2)),
-      low: min,
-      high: max,
-      sample_count: prices.length
-    });
-  } catch (err) {
-    console.error(err);
-    res.status(500).json({ message: 'Suggestion failed', error: err.message });
-  }
+    res.json({
+      count: prices.length,
+      avg: Number(avg.toFixed(2)),
+      low: min,
+      high: max,
+      sample_count: prices.length
+    });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ message: 'Suggestion failed', error: err.message });
+  }
 };

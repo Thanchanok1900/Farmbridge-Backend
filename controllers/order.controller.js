@@ -19,7 +19,7 @@ const Notifications = db.Notifications;
  * รับ Omise Token -> ตัดเงิน(ปลอม) -> ตัดสต็อก -> สร้างออเดอร์
  */
 exports.createOrder = async (req, res) => {
-  // ⭐️ 2. รับ omise_token ที่เพิ่มเข้ามา
+  //  2. รับ omise_token ที่เพิ่มเข้ามา
   const { listing_id, quantity, pickup_slot, omise_token } = req.body;
   const buyer_id = req.identity.id; // มาจาก authenticateToken
 
@@ -29,7 +29,7 @@ exports.createOrder = async (req, res) => {
   }
 
   try {
-    // ⭐️ 3. ค้นหาสินค้า (ยังไม่ล็อค) เพื่อคำนวณราคา
+    //  3. ค้นหาสินค้า (ยังไม่ล็อค) เพื่อคำนวณราคา
     const listing = await Listings.findByPk(listing_id);
 
     if (!listing) {
@@ -38,13 +38,15 @@ exports.createOrder = async (req, res) => {
     if (listing.status !== 'available') {
       return res.status(400).json({ message: 'สินค้านี้ขายไปแล้ว' });
     }
-    // ตรวจสอบจำนวนที่สั่งซื้อเทียบกับสต็อก
-    if (listing.quantity_available < quantity) {
+    
+    // แก้ไขจุดที่ 1: แปลงเป็น Number ก่อนเทียบ 
+    if (parseFloat(listing.quantity_available) < parseFloat(quantity)) {
       return res.status(400).json({ message: `สินค้ามีไม่เพียงพอ (เหลือ: ${listing.quantity_available})` });
     }
 
     //  4. คำนวณราคา (Omise รับเป็นสตางค์)
-    const total_price = listing.price_per_unit * quantity;
+    // แก้ไขจุดที่ 2: แปลงเป็น Number ก่อนคูณ
+    const total_price = parseFloat(listing.price_per_unit) * parseFloat(quantity);
     const amount_in_satang = Math.round(total_price * 100); // เช่น 150 บาท -> 15000 สตางค์
 
     //  5. "ตัดเงิน(ปลอม)" โดยใช้ Omise (Test Mode)
@@ -57,7 +59,6 @@ exports.createOrder = async (req, res) => {
         description: `Order for listing ${listing_id} by buyer ${buyer_id}`
       });
 
-      // (เช็กว่าสำเร็จจริงไหม)
       if (charge.status !== 'successful') {
         throw new Error(`Payment failed: ${charge.failure_message || 'Unknown error'}`);
       }
@@ -70,13 +71,14 @@ exports.createOrder = async (req, res) => {
     const t = await db.sequelize.transaction();
     try {
       // 6.1 ล็อคแถวข้อมูลและตัดสต็อก
-      // (ต้องค้นหาอีกครั้งภายใน Transaction เพื่อ Lock)
       const lockedListing = await Listings.findByPk(listing_id, { transaction: t, lock: t.LOCK.UPDATE });
       
-      const newQuantity = lockedListing.quantity_available - quantity;
+      //  แก้ไขจุดที่ 3: แปลงเป็น Number ก่อนลบ
+      const newQuantity = parseFloat(lockedListing.quantity_available) - parseFloat(quantity);
+      
       await lockedListing.update({
         quantity_available: newQuantity,
-        status: newQuantity <= 0 ? 'sold_out' : 'available' // ถ้าของหมด ให้เปลี่ยนสถานะ
+        status: newQuantity <= 0 ? 'sold_out' : 'available' 
       }, { transaction: t });
 
       // 6.2 สร้างรหัสรับสินค้า (สุ่ม 6 ตัว)
@@ -89,10 +91,10 @@ exports.createOrder = async (req, res) => {
         seller_id: lockedListing.seller_id,
         quantity_ordered: quantity,
         total_price: total_price,
-        status: 'Processing', // สถานะ: รอดำเนินการ (รอรับของ)
+        status: 'Processing',
         confirmation_code: confirmation_code,
         pickup_slot: pickup_slot,
-        charge_id: charge.id // (Optional) เก็บ ID การจ่ายเงินของ Omise ไว้
+        charge_id: charge.id 
       }, { transaction: t });
 
       // 6.4 สร้างการแจ้งเตือนไปหาเกษตรกร
@@ -106,11 +108,9 @@ exports.createOrder = async (req, res) => {
         related_id: order.id
       }, { transaction: t });
 
-      // (ส่วนนี้คือการยิง Real-time/FCM ที่คุณมีอยู่แล้ว)
-      // (เช็กให้แน่ใจว่า req.app.locals มีจริง)
+      // (ส่วน Real-time/FCM)
       const emitToUser = req.app.locals.emitToUser;
       const admin = req.app.locals.firebaseAdmin;
-      
       const pushed = emitToUser ? emitToUser(listing.seller_id, 'notification', { message, orderId: order.id }) : false;
       
       if (!pushed && admin && seller && seller.device_token) {
@@ -123,19 +123,15 @@ exports.createOrder = async (req, res) => {
         } catch (e) { console.error('FCM send failed', e); }
       }
       
-
       await t.commit();
       res.status(201).json({ message: 'สั่งซื้อสำเร็จ!', order: order });
 
     } catch (dbErr) {
       await t.rollback();
-      
       console.error('DB Error after payment:', dbErr);
       res.status(500).json({ message: 'จ่ายเงินแล้ว แต่สร้างออเดอร์ล้มเหลว', error: dbErr.message });
     }
-
   } catch (err) {
-    // (Error ตอนเช็ก listing หรือตอนจ่ายเงิน)
     console.error(err);
     res.status(500).json({ message: 'การสั่งซื้อล้มเหลว', error: err.message });
   }
@@ -145,49 +141,36 @@ exports.createOrder = async (req, res) => {
  * 2. (Farmer) ยืนยันการรับสินค้า (เกษตรกรกรอกรหัส)
  */
 exports.confirmPickup = async (req, res) => {
+  
   const { confirmation_code } = req.body;
   const { order_id } = req.params;
-  const farmer_id = req.identity.id; // มาจาก authenticateToken
+  const farmer_id = req.identity.id; 
 
   if (!confirmation_code) {
     return res.status(400).json({ message: 'กรุณาระบุรหัสรับสินค้า' });
   }
-
   try {
     const order = await Orders.findByPk(order_id);
-
     if (!order) {
       return res.status(404).json({ message: 'ไม่พบออเดอร์' });
     }
-    // ตรวจสอบว่าเกษตรกรเป็นเจ้าของออเดอร์นี้
     if (order.seller_id !== farmer_id) {
       return res.status(403).json({ message: 'คุณไม่ใช่เจ้าของออเดอร์นี้' });
     }
-    // ตรวจสอบสถานะ
     if (order.status !== 'Processing') {
       return res.status(400).json({ message: 'ออเดอร์นี้ถูกจัดการไปแล้ว' });
     }
-    //  ตรวจสอบรหัส 
     if (order.confirmation_code !== confirmation_code.trim().toUpperCase()) {
       return res.status(400).json({ message: 'รหัสรับสินค้าไม่ถูกต้อง' });
     }
-
-    
-    
-    // อัปเดตสถานะออเดอร์
     await order.update({ status: 'Completed' });
-
-    // สร้างการแจ้งเตือนกลับไปหาผู้ซื้อ (ว่ารับของแล้ว)
     await Notifications.create({
       user_id: order.buyer_id,
       type: 'order_completed',
       message: `รับสินค้า ${order.confirmation_code} สำเร็จแล้ว`,
       related_id: order.id
     });
-    // (ยิง Real-time/FCM กลับไปหา Buyer ด้วย Logic เดียวกัน)
-
     res.json({ message: 'ยืนยันการรับสินค้าสำเร็จ!', order });
-
   } catch (err) {
     console.error(err);
     res.status(500).json({ message: 'การยืนยันล้มเหลว', error: err.message });
@@ -196,24 +179,22 @@ exports.confirmPickup = async (req, res) => {
 
 /**
  * 3. (Buyer) ดึงประวัติการซื้อของฉัน
- * (สำหรับหน้า "ประวัติการซื้อ" ของผู้ซื้อ)
  */
 exports.getPurchaseHistory = async (req, res) => {
+
   try {
     const orders = await Orders.findAll({
-      where: { buyer_id: req.identity.id }, // ดึงเฉพาะของคนที่ Login
+      where: { buyer_id: req.identity.id },
       order: [['created_at', 'DESC']], 
       include: [
-        // ดึงข้อมูลสินค้ามาด้วย
         { 
           model: Listings, 
           attributes: ['id', 'product_name', 'image_url'] 
         },
-        // ดึงข้อมูลผู้ขาย (เกษตรกร) มาด้วย
         { 
           model: Farmers, 
           as: 'Seller', 
-          attributes: ['id', 'fullname', 'phone'] //  ส่งเบอร์โทรไปด้วย
+          attributes: ['id', 'fullname', 'phone'] 
         }
       ]
     });
@@ -226,12 +207,12 @@ exports.getPurchaseHistory = async (req, res) => {
 
 /**
  * 4. (Farmer) ดึงประวัติการขายของฉัน
- * (สำหรับหน้า "รายการที่ต้องเตรียม" ของเกษตรกร)
  */
 exports.getSalesHistory = async (req, res) => {
+  
   try {
     const orders = await Orders.findAll({
-      where: { seller_id: req.identity.id }, // ดึงเฉพาะของคนที่ Login
+      where: { seller_id: req.identity.id }, 
       order: [['created_at', 'DESC']], 
       include: [
         { 
@@ -240,7 +221,7 @@ exports.getSalesHistory = async (req, res) => {
         },
         { 
           model: Buyers, 
-          as: 'Buyer', // (ต้องตั้งชื่อ as: 'Buyer' ใน Model Orders ใหถูก)
+          as: 'Buyer', 
           attributes: ['id', 'fullname']
         }
       ]

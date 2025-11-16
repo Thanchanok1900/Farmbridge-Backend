@@ -24,4 +24,4 @@ router.get('/history/sales',authenticateToken,checkRole('farmer'),orderControlle
 // POST /api/orders/:order_id/confirm (ยืนยันการรับสินค้าของเกษตรกร)
 router.post('/:order_id/confirm',authenticateToken,checkRole('farmer'),orderController.confirmPickup);
 
-module.exports = router;
+module.exports = router ;
