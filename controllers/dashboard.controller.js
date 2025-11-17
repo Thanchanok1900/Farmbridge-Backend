@@ -86,14 +86,65 @@ exports.getImpactDashboard = async (req, res) => {
       metrics: {
         totalRevenue,
         totalTransactions,
-        revenueFromMiddlemen,
-        increasePercent
+        increasePercent,
+        latestSale: latestOrder ? {
+          product_name: latestOrder.Listing.product_name,
+          grade: latestOrder.Listing.grade,
+          quantity: latestOrder.quantity_ordered
+        } : null
       },
       priceTrends
     });
 
   } catch (err) {
-    console.error(err);
-    res.status(500).json({ message: 'Failed to fetch dashboard', error: err.message });
+    console.error('Dashboard Error:', err);
+    res.status(500).json({ message: 'Failed to fetch dashboard data', error: err.message });
+  }
+};
+
+exports.getDashboardStats = async (req, res) => {
+  try {
+    const latestMetrics = await DashboardMetrics.findOne({
+      order: [['updated_at', 'DESC']]
+    });
+
+    const [
+      activeListings,
+      completedOrders,
+      totalFarmers,
+      totalBuyers
+    ] = await Promise.all([
+      Listings.count({ where: { status: 'available' } }),
+      Orders.count({ where: { status: 'Completed' } }),
+      Farmers.count(),
+      Buyers.count()
+    ]);
+
+    const formattedMetrics = latestMetrics ? {
+      total_sales_value: Number(latestMetrics.total_sales_value || 0),
+      total_transactions: Number(latestMetrics.total_transactions || 0),
+      average_price: Number(latestMetrics.average_price || 0),
+      waste_reduced_kg: Number(latestMetrics.waste_reduced_kg || 0),
+      updated_at: latestMetrics.updated_at
+    } : {
+      total_sales_value: 0,
+      total_transactions: 0,
+      average_price: 0,
+      waste_reduced_kg: 0,
+      updated_at: null
+    };
+
+    res.json({
+      metrics: formattedMetrics,
+      totals: {
+        activeListings,
+        completedOrders,
+        totalFarmers,
+        totalBuyers
+      }
+    });
+  } catch (err) {
+    console.error('Dashboard Stats Error:', err);
+    res.status(500).json({ message: 'Failed to fetch dashboard stats', error: err.message });
   }
 };
