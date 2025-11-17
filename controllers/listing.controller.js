@@ -12,10 +12,22 @@ const allowedGrades = ['เกรด B', 'เกรด C', 'เกรดต่�
 // GET all listings (ดึงทั้งหมด)
 exports.getAll = async (req, res) => {
   try {
-    const { product_name, status } = req.query;
+    const { product_name, status ,keyword } = req.query;
     const where = {};
     if (product_name) where.product_name = product_name.trim();
     if (status) where.status = status.trim();
+
+    // ค้นหาด้วย keyword (search)
+      if (keyword) {
+      const searchTerm = keyword.trim();
+      where[Op.or] = [
+        { product_name: { [Op.like]: `%${searchTerm}%` } }, // เช่น พิมพ์ "ทุ" ก็เจอ "ทุเรียน"
+        { description:  { [Op.like]: `%${searchTerm}%` } }, // เจอในรายละเอียด
+        { grade:        { [Op.like]: `%${searchTerm}%` } }  // เจอในเกรด
+      ];
+    }
+
+
     const rows = await Listings.findAll({
       where,
       include: [
