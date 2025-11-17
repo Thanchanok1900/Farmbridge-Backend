@@ -1,33 +1,51 @@
+// models/notifications.model.js
 const { DataTypes } = require('sequelize');
 
 module.exports = (sequelize) => {
-  const Notifications = sequelize.define('Notifications', {
-    user_id: {
-      type: DataTypes.INTEGER,
+  const Notifications = sequelize.define('Notifications', {
+    user_id: {
+      type: DataTypes.INTEGER,
+      allowNull: false
+    },
+    message: DataTypes.TEXT,
+    type: {
+      
+      type: DataTypes.ENUM(
+        'match', 'payment', 'system', 'info', 
+        'sale', 'order_completed' 
+      ),
       allowNull: false
-    },
-    message: DataTypes.TEXT,
-    type: {
-      type: DataTypes.ENUM('match', 'payment', 'system', 'info')
-    },
-    is_read: {
-      type: DataTypes.BOOLEAN,
-      defaultValue: false
-    },
+    },
+    is_read: {
+      type: DataTypes.BOOLEAN,
+      defaultValue: false
+    },
 
-    meta: {
-      type: DataTypes.JSONB,   // ← เพิ่มใหม่
+    
+    related_id: {
+      type: DataTypes.INTEGER,
       allowNull: true
     },
 
-    created_at: {
-      type: DataTypes.DATE,
-      defaultValue: DataTypes.NOW
-    }
-  }, {
-    tableName: 'notifications',
-    timestamps: false
-  });
+    meta: { 
+      type: DataTypes.JSONB, 
+      allowNull: true
+    },
 
-  return Notifications;
+    created_at: {
+      type: DataTypes.DATE,
+      defaultValue: DataTypes.NOW
+    }
+  }, {
+    tableName: 'notifications',
+    timestamps: false,
+    updatedAt: false 
+  });
+
+  // ⭐️⭐️⭐️ เพิ่ม: .associate ตามมาตรฐานใหม่ ⭐️⭐️⭐️
+  Notifications.associate = (models) => {
+    // (ยังไม่ต้องเชื่อมโยงอะไรเป็นพิเศษ)
+  };
+
+  return Notifications;
 };

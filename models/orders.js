@@ -21,10 +21,6 @@ module.exports = (sequelize) => {
         type: DataTypes.TEXT,
         allowNull: false
     },
-    charge_id: { // ID จาก Omise
-        type: DataTypes.STRING,
-        allowNull: true
-    },
     created_at: { type: DataTypes.DATE, defaultValue: DataTypes.NOW },
     updated_at: { type: DataTypes.DATE, defaultValue: DataTypes.NOW }
     }, {
@@ -44,3 +40,8 @@ module.exports = (sequelize) => {
 
     return Orders;
 };
+
+
+
+
+
