@@ -1,49 +1,87 @@
+// controllers/notification.controller.js
 const db = require('../models');
 const Notifications = db.Notifications;
+// ลบ require modules ที่ไม่จำเป็นออกไป (Listings, Buyers, Farmers, calculateDistance)
+// เนื่องจากเราจะใช้ข้อมูลระยะห่างที่ถูกบันทึกไว้แล้วใน field 'meta'
 
 // GET /api/notifications
 exports.getMyNotifications = async (req, res) => {
   try {
-    const user_id = req.identity.id; // ดึง ID ของคน Login (Buyer)
+    const user_id = req.identity.id;
 
-    // ดึงข้อมูลจากตาราง Notifications ที่ create ไว้ใน listing.controller.js
     const notifications = await Notifications.findAll({
-      where: { user_id: user_id },
-      order: [['created_at', 'DESC']], // ใหม่สุดขึ้นก่อน
+      where: { user_id },
+      // ⭐️ ไม่ต้องมี include แล้ว
+      order: [["created_at", "DESC"]], // เรียงตามเวลาสร้างก่อนเบื้องต้น
       limit: 50
     });
-    
-    // สิ่งที่ Frontend จะได้:
-    // [
-    //   {
-    //     "id": 1,
-    //     "type": "match",
-    //     "message": "พบ มะม่วง ราคา 18 บ. (คุณขอ 15 บ.) ห่าง 5.2 กม.",
-    //     "related_id": 105,  <-- เอา ID นี้ไปเปิดหน้า Listing Detail เพื่อกดซื้อ
-    //     "is_read": false,
-    //     "created_at": "..."
-    //   }
-    // ]
 
-    res.json(notifications);
+    const enhanced = notifications.map(n => {
+      
+      // ⭐️ ดึงค่า distance_km จาก field meta (JSONB)
+      const distance = n.meta?.distance_km ?? null;
+      let distanceKm = null;
+      let message = n.message;
+      
+      if (distance !== null) {
+          // แปลงค่า distance เป็นตัวเลข (ทศนิยม 2 ตำแหน่ง)
+          distanceKm = Number(parseFloat(distance).toFixed(2)); 
+          
+          // ⭐️ เพิ่มข้อความระยะห่างเข้าใน message 
+          message += ` (ห่าง ${distanceKm.toFixed(1)} กม.)`; 
+      }
+      
+      return {
+        id: n.id,
+        type: n.type,
+        message: message,
+        related_id: n.related_id,
+        is_read: n.is_read,
+        distance: distanceKm, // ใช้ Field นี้ในการเรียงลำดับ
+        created_at: n.created_at
+      };
+    });
+
+    // ⭐️ เรียงลำดับสุดท้ายตามระยะทาง (น้อยไปมาก)
+    // การแจ้งเตือนที่ไม่มีระยะทาง (distance === null) จะถูกย้ายไปอยู่ท้ายสุด
+    enhanced.sort((a, b) => {
+        // จัดการกรณี distance เป็น null
+        if (a.distance === null) return 1;
+        if (b.distance === null) return -1;
+        // เรียงจากน้อยไปมาก
+        return a.distance - b.distance; 
+    });
+
+    res.json(enhanced);
+
   } catch (err) {
     console.error(err);
-    res.status(500).json({ message: 'Failed to fetch notifications' });
+    res.status(500).json({ message: 'Failed to fetch notifications', error: err.message });
   }
 };
 
-// POST /api/notifications/:id/read (มาร์คว่าอ่านแล้ว)
 exports.markAsRead = async (req, res) => {
-    try {
-        const { id } = req.params;
-        const notif = await Notifications.findByPk(id);
-        if(notif && notif.user_id === req.identity.id) {
-            await notif.update({ is_read: true });
-            res.json({ message: 'Read' });
-        } else {
-            res.status(404).json({ message: 'Not found' });
-        }
-    } catch(err) {
-        res.status(500).json({ message: 'Error' });
+  try {
+    const { id } = req.params;
+    const user_id = req.identity.id; // ใช้ ID ของผู้ใช้ปัจจุบัน
+
+    const notification = await Notifications.findOne({
+      where: { id: id, user_id: user_id }
+    });
+
+    if (!notification) {
+      return res.status(404).json({ message: 'Notification not found' });
     }
+
+    if (notification.is_read) {
+      return res.status(200).json({ message: 'Notification already marked as read' });
+    }
+
+    await notification.update({ is_read: true });
+
+    res.json({ message: 'Notification marked as read successfully' });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ message: 'Failed to mark as read', error: err.message });
+  }
 };

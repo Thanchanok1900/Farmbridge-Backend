@@ -128,7 +128,8 @@ exports.createDemand = async (req, res) => {
         user_id: item.listing.seller_id, // ส่งหา Seller
         type: 'match',
         message: msg,
-        related_id: demand.id // ⭐️ ลิงก์มาที่ Demand นี้ เพื่อให้เกษตรกรกดดูรายละเอียด
+        related_id: demand.id, // ⭐️ ลิงก์มาที่ Demand นี้ เพื่อให้เกษตรกรกดดูรายละเอียด
+        meta: { distance_km: item.distance_km }
       });
 
       // 3.4 Realtime

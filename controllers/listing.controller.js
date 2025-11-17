@@ -206,7 +206,8 @@ exports.create = async (req, res) => {
         user_id: item.demand.buyer_id, // ส่งหาผู้ซื้อ
         type: 'match',
         message: msg,
-        related_id: listing.id // ✅ ใส่ ID เพื่อให้กดแล้วไปหน้า Listing Detail
+        related_id: listing.id, // ✅ ใส่ ID เพื่อให้กดแล้วไปหน้า Listing Detail
+        meta: { distance_km: item.distance_km }
       });
 
       // 5.4 Realtime (ถ้าเปิดแอปอยู่)
