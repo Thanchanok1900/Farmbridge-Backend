@@ -6,6 +6,7 @@ const { authenticateToken } = require('../middleware/auth.middleware');
 const { checkRole } = require('../middleware/role.middleware');
 
 // market suggestion (public)
+// “แนะนำราคาให้เกษตรกร” โดยดึงข้อมูลที่ สรุปแล้วจากออเดอร์ทั้งหมดในระบบ
 router.get('/market-suggestion', listingController.marketSuggestion);
 
 // public

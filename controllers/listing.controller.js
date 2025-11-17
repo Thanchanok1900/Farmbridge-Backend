@@ -78,6 +78,11 @@ exports.create = async (req, res) => {
 
     // 1. Validation
     if (!allowedProducts.includes(product_name)) return res.status(400).json({ message: 'ชื่อสินค้าไม่ถูกต้อง' });
+
+    // ตรวจสอบ grade (ถ้ามีส่งเข้ามา)
+    if (grade && !allowedGrades.includes(grade)) {
+      return res.status(400).json({ message: 'เกรดสินค้าไม่ถูกต้อง' });
+    }
     
     // แปลงตัวเลขให้ชัวร์
     const qty = parseFloat(quantity_total);
@@ -238,6 +243,18 @@ exports.update = async (req, res) => {
     const { product_name, grade, quantity_total, price_per_unit, pickup_date, description, image_urls } = req.body;
     const payload = {};
 
+    // ⭐️⭐️ ตรวจสอบ grade ว่าต้องอยู่ใน allowedGrades เท่านั้น ⭐️⭐️
+    if (grade && !allowedGrades.includes(grade)) {
+      return res.status(400).json({ message: 'เกรดสินค้าไม่ถูกต้อง' });
+    }
+    if (grade) payload.grade = grade;
+
+    // ⭐️ product_name validation (ถ้ามีแก้)
+    if (product_name && !allowedProducts.includes(product_name)) {
+      return res.status(400).json({ message: 'ชื่อสินค้าไม่ถูกต้อง' });
+    }
+    if (product_name) payload.product_name = product_name;
+
     // ... (ใส่ logic update ปกติของคุณตรงนี้ได้เลย) ...
     // เพื่อความสั้น ผมละส่วน update ไว้ (ใช้โค้ดเดิมของคุณได้เลยครับ มันถูกต้องแล้ว)
     // แค่อย่าลืมใช้ parseFloat() ถ้ามีการคำนวณ
@@ -285,26 +302,31 @@ exports.marketSuggestion = async (req, res) => {
   try {
     const { product_name, days = 7 } = req.query;
     if (!product_name) return res.status(400).json({ message: 'product_name required' });
+
     const since = new Date();
     since.setDate(since.getDate() - Number(days));
 
-    const rows = await Listings.findAll({
+    const rows = await db.PriceHistory.findAll({
       where: {
-        product_name: product_name,
-        created_at: { [Op.gte]: since },
-        price_per_unit: { [Op.ne]: null }
-      },
-      attributes: ['price_per_unit', 'created_at']
+        product_name,
+        record_date: { [Op.gte]: since },
+        source: 'real_order'  // ⭐ ใช้เฉพาะราคาซื้อขายจริง
+      }
     });
 
-    if (!rows || rows.length === 0) return res.json({ count: 0, avg: null });
+    if (!rows || rows.length === 0)
+      return res.json({ count: 0, avg: null, low: null, high: null });
 
-    const prices = rows.map(r => parseFloat(r.price_per_unit)); // ✅ ใช้ parseFloat
+    const prices = rows.map(r => parseFloat(r.average_price));
     const avg = prices.reduce((a, b) => a + b, 0) / prices.length;
-    const min = Math.min(...prices);
-    const max = Math.max(...prices);
 
-    res.json({ count: prices.length, avg: Number(avg.toFixed(2)), low: min, high: max });
+    res.json({
+      count: prices.length,
+      avg: Number(avg.toFixed(2)),
+      low: Math.min(...prices),
+      high: Math.max(...prices)
+    });
+
   } catch (err) {
     res.status(500).json({ message: 'Suggestion failed', error: err.message });
   }

@@ -1,12 +1,11 @@
-// server.js (replacement)
+// server.js (no socket.io)
 const express = require('express');
 const cors = require('cors');
 const db = require('./models');
-const http = require('http');
-const { Server } = require('socket.io');
 const admin = require('firebase-admin');
-const serviceAccount = require('./serviceAccountKey.json'); // ใส่ไฟล์นี้ด้วย
+const serviceAccount = require('./serviceAccountKey.json'); // อย่าลืมใส่ไฟล์นี้
 
+// Firebase Admin
 admin.initializeApp({
   credential: admin.credential.cert(serviceAccount)
 });
@@ -25,58 +24,18 @@ app.use('/api/notifications', require('./routes/notification.routes'));
 app.use('/api/prices', require('./routes/price.routes'));
 app.use('/api/dashboard', require('./routes/dashboard.routes'));
 
-const PORT = process.env.PORT || 3000;
-
-const httpServer = http.createServer(app);
-const io = new Server(httpServer, {
-  cors: { origin: '*' },
-  path: '/socket.io'
-});
-
-// Simple in-memory map: userId -> Set(socketId)
-const onlineUsers = new Map();
-
-io.on('connection', (socket) => {
-  // client should emit 'auth' with { userId } right after connect
-  socket.on('auth', ({ userId }) => {
-    if (!userId) return;
-    const set = onlineUsers.get(userId) || new Set();
-    set.add(socket.id);
-    onlineUsers.set(userId, set);
-    socket.userId = userId;
-  });
-
-  socket.on('disconnect', () => {
-    const userId = socket.userId;
-    if (userId) {
-      const set = onlineUsers.get(userId);
-      if (set) {
-        set.delete(socket.id);
-        if (set.size === 0) onlineUsers.delete(userId);
-        else onlineUsers.set(userId, set);
-      }
-    }
-  });
-});
-
-// helper to emit to a userId
-function emitToUser(userId, event, payload) {
-  const set = onlineUsers.get(String(userId)) || onlineUsers.get(Number(userId));
-  if (set && set.size > 0) {
-    for (const sid of set) io.to(sid).emit(event, payload);
-    return true;
-  }
-  return false;
-}
-
-// expose to other modules
-app.locals.emitToUser = emitToUser;
+// Firebase admin ให้ module อื่นใช้
 app.locals.firebaseAdmin = admin;
 
+const PORT = process.env.PORT || 3000;
+
+// Start server normally
 db.sequelize.sync({ alter: true })
   .then(() => {
     console.log('✅ Database synced');
-    httpServer.listen(PORT, () => console.log(`🚀 Server started on port ${PORT}`));
+    app.listen(PORT, () =>
+      console.log(`🚀 Server started on port ${PORT}`)
+    );
   })
   .catch(err => {
     console.error('DB sync failed', err);
