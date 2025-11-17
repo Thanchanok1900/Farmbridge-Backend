@@ -11,8 +11,6 @@ router.post('/',authenticateToken,checkRole('buyer'),orderController.createOrder
 // GET /api/orders/history/purchase (ดึงประวัติการซื้อของฉัน Buyer)
 router.get('/history/purchase',authenticateToken,checkRole('buyer'),orderController.getPurchaseHistory);
 
-
-
 // Farmer Routes (ฝั่งเกษตรกร)
 // GET /api/orders/history/sales (ดึงประวัติการขายของฉัน Farmer)
 router.get('/history/sales',authenticateToken,checkRole('farmer'),orderController.getSalesHistory);

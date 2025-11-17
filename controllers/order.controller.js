@@ -2,13 +2,13 @@
 const db = require('../models');
 const { Op } = require('sequelize');
 
-
 // Models
 const Orders = db.Orders;
 const Listings = db.Listings;
 const Buyers = db.Buyers;
 const Farmers = db.Farmers;
 const Notifications = db.Notifications;
+const PriceHistory = db.PriceHistory;
 
 // 1. (Buyer) สร้างออเดอร์ใหม่(Frontend จะเรียก API นี้ "หลังจาก" หน่วงเวลา 5 วินาที ฟีลๆแกล้งๆโหลด 5 วินาที เพื่อจำลองการจ่ายเงิน)
 exports.createOrder = async (req, res) => {
@@ -120,7 +120,7 @@ exports.confirmPickup = async (req, res) => {
     return res.status(400).json({ message: 'กรุณาระบุรหัสรับสินค้า' });
   }
   try {
-    const order = await Orders.findByPk(order_id);
+    const order = await Orders.findByPk(order_id, { include: Listings });
     if (!order) {
       return res.status(404).json({ message: 'ไม่พบออเดอร์' });
     }
@@ -139,7 +139,20 @@ exports.confirmPickup = async (req, res) => {
     await order.update({ 
       status: 'Completed',
       updated_at: new Date() 
-    }); 
+    });
+    
+    // บันทึกราคาต่อหน่วยลง PriceHistory
+    if (order.Listing) {
+      const unitPrice = parseFloat(order.total_price) / parseFloat(order.quantity_ordered);
+      await PriceHistory.create({
+        product_name: order.Listing.product_name,
+        average_price: unitPrice,
+        min_price: unitPrice,
+        max_price: unitPrice,
+        source: 'real_order',
+        record_date: new Date()
+      });
+    }
     
     await Notifications.create({
       user_id: order.buyer_id,
@@ -201,5 +214,19 @@ exports.getSalesHistory = async (req, res) => {
   } catch (err) {
     console.error(err);
     res.status(500).json({ message: 'Failed to fetch sales history', error: err.message });
+  }
+};
+
+// GET /api/prices/real-market
+exports.realMarketPrices = async (req, res) => {
+  try {
+    const prices = await PriceHistory.findAll({
+      where: { source: 'real_order' },
+      order: [['record_date', 'DESC']]
+    });
+    res.json(prices);
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ message: 'Failed to fetch real market prices', error: err.message });
   }
 };
