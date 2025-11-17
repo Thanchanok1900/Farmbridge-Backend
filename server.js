@@ -29,7 +29,8 @@ const PORT = process.env.PORT || 3000;
 
 const httpServer = http.createServer(app);
 const io = new Server(httpServer, {
-  cors: { origin: '*' }
+  cors: { origin: '*' },
+  path: '/socket.io'
 });
 
 // Simple in-memory map: userId -> Set(socketId)
