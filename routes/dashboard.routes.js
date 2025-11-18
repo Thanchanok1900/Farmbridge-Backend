@@ -6,6 +6,13 @@ const { checkRole } = require('../middleware/role.middleware');
 const dashboardController = require('../controllers/dashboard.controller');
 
 // แดชบอร์ดเฉพาะเกษตรกร
-router.get('/', authenticateToken, checkRole('farmer'), dashboardController.getImpactDashboard);
+//router.get('/', authenticateToken, checkRole('farmer'), dashboardController.getImpactDashboard);
+
+router.get(
+  '/', 
+  authenticateToken, 
+  checkRole('farmer'), 
+  dashboardController.getImpactDashboard
+);
 
 module.exports = router;

@@ -16,7 +16,7 @@ exports.createDemand = async (req, res) => {
 
     // Validation
     if (!product_name || !desired_quantity || !unit) {
-      return res.status(400).json({ message: 'กรุณาระบุข้อมูลให้ครบ (ชื่อสินค้า, จำนวน, หน่วย)' });
+      return res.status(400).json({ message: 'กรุณาระบุข้อมูลให้ครบ' });
     }
 
     const qty = parseFloat(desired_quantity);
@@ -116,12 +116,19 @@ exports.createDemand = async (req, res) => {
 
       // 3.2 สร้างข้อความ (ใส่ราคาและระยะทาง)
       let msg = `มีผู้ซื้อต้องการ ${product_name} จำนวน ${qty} ${unit}`;
+      if (item.distance_km !== null) msg += ` ห่าง ${item.distance_km.toFixed(1)} กม.`;
       if (price) {
         msg += ` ราคา ${price} บ. (คุณขาย ${item.listing.price_per_unit} บ.)`;
       }
-      if (item.distance_km !== null) {
-        msg += ` ห่าง ${item.distance_km.toFixed(1)} กม.`;
-      }
+      
+      await Notifications.create({
+        user_id: item.listing.seller_id,
+        type: 'match',
+        message: sellerMsg,
+        related_id: demand.id,
+        meta: { distance_km: item.distance_km }
+      });
+      if (emitToUser) emitToUser(item.listing.seller_id, 'notification', { message: sellerMsg });
 
       // 3.3 ⭐️ สร้าง Notification ลง DB (ส่งหาเกษตรกร)
       const notif = await Notifications.create({

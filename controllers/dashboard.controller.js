@@ -9,7 +9,9 @@ exports.getImpactDashboard = async (req, res) => {
   try {
     const farmer_id = req.identity.id;
 
-    // 1. ดึง orders ที่สำเร็จแล้ว พร้อม join Listing เพื่อเอา product_name
+    console.log('🔍 Fetching dashboard for farmer_id:', farmer_id);
+
+    // 1. ดึง orders ที่สำเร็จแล้ว พร้อม join Listing
     const orders = await Orders.findAll({
       where: {
         seller_id: farmer_id,
@@ -18,132 +20,116 @@ exports.getImpactDashboard = async (req, res) => {
       include: [
         {
           model: Listings,
-          attributes: ['product_name']
+          attributes: ['product_name', 'grade'],
+          required: false
         }
-      ]
+      ],
+      order: [['created_at', 'DESC']]
     });
 
+    console.log('📦 Found orders:', orders.length);
+
     // 2. คำนวณ total revenue
-    const totalRevenue = orders.reduce((sum, o) => sum + Number(o.total_price), 0);
+    const totalRevenue = orders.reduce((sum, o) => sum + Number(o.total_price || 0), 0);
     const totalTransactions = orders.length;
 
-    // 3. เปรียบเทียบราคาขายให้พ่อค้าคนกลาง (ใช้ priceData)
+    // 3. หา latest order
+    const latestOrder = orders.length > 0 ? orders[0] : null;
+
+    // 4. เปรียบเทียบราคาขายให้พ่อค้าคนกลาง
     let revenueFromMiddlemen = 0;
     for (const o of orders) {
       const productName = o.Listing?.product_name || 'Unknown';
       const productPrice = priceData.find(p => p.product_name === productName);
-      if (productPrice) {
-        const [minStr, maxStr] = productPrice.lheng_low_grade.split('-');
-        const min = parseFloat(minStr);
-        const max = parseFloat(maxStr) || min;
+      
+      if (productPrice && productPrice.lheng_low_grade) {
+        const priceRange = productPrice.lheng_low_grade.split('-');
+        const min = parseFloat(priceRange[0]) || 0;
+        const max = parseFloat(priceRange[1]) || min;
         const avgMarketPrice = (min + max) / 2;
-
-        revenueFromMiddlemen += avgMarketPrice * Number(o.quantity_ordered);
+        revenueFromMiddlemen += avgMarketPrice * Number(o.quantity_ordered || 0);
       }
     }
 
     const increasePercent = revenueFromMiddlemen > 0
-      ? ((totalRevenue - revenueFromMiddlemen) / revenueFromMiddlemen * 100).toFixed(2)
-      : null;
+      ? Number(((totalRevenue - revenueFromMiddlemen) / revenueFromMiddlemen * 100).toFixed(2))
+      : 0;
 
-    // 4. ราคาที่ขายจริงของสินค้าที่ขายได้ (แทน priceData)
-    const soldProducts = [...new Set(orders.map(o => o.Listing?.product_name || 'Unknown'))];
+    console.log('💰 Revenue:', { totalRevenue, revenueFromMiddlemen, increasePercent });
+
+    // 5. สร้าง price trends จากข้อมูลจริง
+    const soldProducts = [...new Set(orders.map(o => o.Listing?.product_name).filter(Boolean))];
     const priceTrends = {};
 
     for (const product of soldProducts) {
-      // เลือก orders ของ product นี้
       const productOrders = orders.filter(o => o.Listing?.product_name === product);
+      
+      // จัดกลุ่มตามเดือน
+      const monthlyData = {};
+      productOrders.forEach(o => {
+        const date = new Date(o.created_at);
+        const month = date.toLocaleDateString('th-TH', { month: 'short' });
+        const quantity = Number(o.quantity_ordered || 1);
+        const pricePerKg = quantity > 0 ? Number(o.total_price || 0) / quantity : 0;
+        
+        if (!monthlyData[month]) {
+          monthlyData[month] = [];
+        }
+        monthlyData[month].push(pricePerKg);
+      });
 
-      // คำนวณ min, max, avg จากราคาที่ขายจริง
-      const prices = productOrders.map(o => Number(o.total_price) / Number(o.quantity_ordered));
-
-      const min = Math.min(...prices);
-      const max = Math.max(...prices);
-      const avg = prices.reduce((sum, p) => sum + p, 0) / prices.length;
-
-      priceTrends[product] = {
-        avg,
-        min,
-        max,
-        unit: 'บาท/กก.',
-        last_updated: new Date() // หรือเอาเวลาของ order ล่าสุด
-      };
+      // แปลงเป็น array สำหรับกราฟ
+      priceTrends[product] = Object.entries(monthlyData).map(([date, prices]) => ({
+        date,
+        price: Math.round(
+          prices.reduce((sum, p) => sum + p, 0) / prices.length
+        )
+      }));
     }
 
-    // 5. บันทึก metrics ลง dashboard_metrics
-    await DashboardMetrics.create({
-      farmer_id,
-      total_revenue: totalRevenue,
-      total_transactions: totalTransactions,
-      revenue_from_middlemen: revenueFromMiddlemen,
-      increase_percent: increasePercent,
-      created_at: new Date()
-    });
+    console.log('📊 Price trends:', Object.keys(priceTrends));
 
-    // ส่งข้อมูลไป dashboard
-    res.json({
+    // 6. บันทึก metrics (ถ้ามีข้อมูล)
+    if (totalTransactions > 0) {
+      try {
+        await DashboardMetrics.create({
+          farmer_id,
+          total_sales_value: totalRevenue,
+          total_transactions: totalTransactions,
+          average_price: totalRevenue / totalTransactions,
+          waste_reduced_kg: totalTransactions * 10,
+          updated_at: new Date()
+        });
+      } catch (metricsErr) {
+        console.warn('⚠️  Failed to save metrics:', metricsErr.message);
+      }
+    }
+
+    // 7. ส่งข้อมูลกลับ
+    const response = {
+      success: true,
       metrics: {
         totalRevenue,
         totalTransactions,
         increasePercent,
         latestSale: latestOrder ? {
-          product_name: latestOrder.Listing.product_name,
-          grade: latestOrder.Listing.grade,
-          quantity: latestOrder.quantity_ordered
+          product_name: latestOrder.Listing?.product_name || 'Unknown',
+          grade: latestOrder.Listing?.grade || '-',
+          quantity: latestOrder.quantity_ordered || 0
         } : null
       },
       priceTrends
-    });
-
-  } catch (err) {
-    console.error('Dashboard Error:', err);
-    res.status(500).json({ message: 'Failed to fetch dashboard data', error: err.message });
-  }
-};
-
-exports.getDashboardStats = async (req, res) => {
-  try {
-    const latestMetrics = await DashboardMetrics.findOne({
-      order: [['updated_at', 'DESC']]
-    });
-
-    const [
-      activeListings,
-      completedOrders,
-      totalFarmers,
-      totalBuyers
-    ] = await Promise.all([
-      Listings.count({ where: { status: 'available' } }),
-      Orders.count({ where: { status: 'Completed' } }),
-      Farmers.count(),
-      Buyers.count()
-    ]);
-
-    const formattedMetrics = latestMetrics ? {
-      total_sales_value: Number(latestMetrics.total_sales_value || 0),
-      total_transactions: Number(latestMetrics.total_transactions || 0),
-      average_price: Number(latestMetrics.average_price || 0),
-      waste_reduced_kg: Number(latestMetrics.waste_reduced_kg || 0),
-      updated_at: latestMetrics.updated_at
-    } : {
-      total_sales_value: 0,
-      total_transactions: 0,
-      average_price: 0,
-      waste_reduced_kg: 0,
-      updated_at: null
     };
 
-    res.json({
-      metrics: formattedMetrics,
-      totals: {
-        activeListings,
-        completedOrders,
-        totalFarmers,
-        totalBuyers
-      }
-    });
+    console.log('✅ Dashboard response sent');
+    res.json(response);
+
   } catch (err) {
-    console.error('Dashboard Stats Error:', err);
-    res.status(500).json({ message: 'Failed to fetch dashboard stats', error: err.message });
+    console.error('❌ Dashboard Error:', err);
+    res.status(500).json({ 
+      success: false,
+      message: 'Failed to fetch dashboard data', 
+      error: err.message 
+    });
   }
 };
