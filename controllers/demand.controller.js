@@ -7,6 +7,7 @@ const Notifications = db.Notifications;
 const { Op } = require('sequelize');
 const { geocodeAddress } = require('../utils/geocode');
 const { haversineDistance } = require('../utils/distance');
+const { sendEmail } = require('../utils/email');
 
 // 1. สร้างความต้องการใหม่ (และจับคู่แจ้งเตือนเกษตรกร)
 exports.createDemand = async (req, res) => {
@@ -54,7 +55,7 @@ exports.createDemand = async (req, res) => {
         status: 'available'
       },
       include: [
-        { model: Farmers, as: 'seller', attributes: ['id', 'fullname', 'device_token', 'address'] }
+        { model: Farmers, as: 'seller', attributes: ['id', 'fullname', 'email', 'device_token', 'address'] }
       ]
     });
 
@@ -124,11 +125,11 @@ exports.createDemand = async (req, res) => {
       await Notifications.create({
         user_id: item.listing.seller_id,
         type: 'match',
-        message: msg,
+        message: sellerMsg,
         related_id: demand.id,
         meta: { distance_km: item.distance_km }
       });
-      if (emitToUser) emitToUser(item.listing.seller_id, 'notification', { message: msg });
+      if (emitToUser) emitToUser(item.listing.seller_id, 'notification', { message: sellerMsg });
 
       // 3.3 ⭐️ สร้าง Notification ลง DB (ส่งหาเกษตรกร)
       const notif = await Notifications.create({
@@ -146,6 +147,15 @@ exports.createDemand = async (req, res) => {
           message: msg,
           demand_id: demand.id,
           distance_km: item.distance_km
+        });
+      }
+
+      const sellerEmail = item.listing.seller?.email;
+      if (sellerEmail) {
+        sendEmail({
+          to: sellerEmail,
+          subject: `มีผู้ต้องการ ${product_name} ใกล้คุณ`,
+          text: msg
         });
       }
     }

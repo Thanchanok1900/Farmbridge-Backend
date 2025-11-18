@@ -10,6 +10,7 @@ const Buyers = db.Buyers;
 const Farmers = db.Farmers;
 const Notifications = db.Notifications;
 const PriceHistory = db.PriceHistory;
+const { sendEmail } = require('../utils/email');
 
 // 1. (Buyer) สร้างออเดอร์ใหม่
 exports.createOrder = async (req, res) => {
@@ -88,6 +89,11 @@ exports.createOrder = async (req, res) => {
 
       // สร้าง notification
       const message = `คุณมียอดสั่งซื้อ: ${lockedListing.product_name} จำนวน ${quantity} (รหัส ${confirmation_code})`;
+      const sellerEmailPayload = seller && seller.email ? {
+        to: seller.email,
+        subject: 'คุณมีคำสั่งซื้อใหม่บน Farmbridge',
+        text: message
+      } : null;
 
       await Notifications.create({
         user_id: listing.seller_id,
@@ -117,7 +123,11 @@ exports.createOrder = async (req, res) => {
       }
 
       await t.commit();
-      res.status(201).json({ message: 'สั่งซื้อสำเร็จ!', order });
+
+      if (sellerEmailPayload) {
+        sendEmail(sellerEmailPayload);
+      }
+      res.status(201).json({ message: 'สั่งซื้อสำเร็จ!', order: order });
 
     } catch (dbErr) {
       await t.rollback();
@@ -180,6 +190,15 @@ exports.confirmPickup = async (req, res) => {
       message: `รับสินค้า ${order.confirmation_code} สำเร็จแล้ว`,
       related_id: order.id
     });
+
+    const buyer = await Buyers.findByPk(order.buyer_id);
+    if (buyer && buyer.email) {
+      sendEmail({
+        to: buyer.email,
+        subject: 'ยืนยันการรับสินค้าสำเร็จ',
+        text: `คำสั่งซื้อรหัส ${order.confirmation_code} ของคุณเสร็จสมบูรณ์แล้ว`
+      });
+    }
     res.json({ message: 'ยืนยันการรับสินค้าสำเร็จ!', order });
   } catch (err) {
     console.error(err);
