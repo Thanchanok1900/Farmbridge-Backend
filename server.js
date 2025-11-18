@@ -11,6 +11,10 @@ admin.initializeApp({
 });
 
 const app = express();
+const path = require('path');
+
+// อนุญาตให้เข้าถึงโฟลเดอร์ 'uploads' จากภายนอกได้
+app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
 app.use(cors());
 app.use(express.json({ limit: '5mb' }));
 app.use(express.urlencoded({ extended: true }));
