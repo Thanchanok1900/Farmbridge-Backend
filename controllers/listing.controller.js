@@ -96,6 +96,12 @@ exports.create = async (req, res) => {
     if (grade && !allowedGrades.includes(grade)) {
       return res.status(400).json({ message: 'เกรดสินค้าไม่ถูกต้อง' });
     }
+
+    let image_filenames = [];
+    if (req.files && req.files.length > 0) {
+        // map เอาแค่ชื่อไฟล์เก็บลง Database (เช่น '170555-image.jpg')
+        image_filenames = req.files.map(file => file.filename);
+    }
     
     // แปลงตัวเลขให้ชัวร์
     const qty = parseFloat(quantity_total);
@@ -124,7 +130,7 @@ exports.create = async (req, res) => {
       price_per_unit: price,
       pickup_date,
       description: description || null,
-      image_url: image_urls,
+      image_url: image_filenames,
       status: 'available',
       location_geom
     });
