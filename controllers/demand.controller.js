@@ -124,11 +124,11 @@ exports.createDemand = async (req, res) => {
       await Notifications.create({
         user_id: item.listing.seller_id,
         type: 'match',
-        message: sellerMsg,
+        message: msg,
         related_id: demand.id,
         meta: { distance_km: item.distance_km }
       });
-      if (emitToUser) emitToUser(item.listing.seller_id, 'notification', { message: sellerMsg });
+      if (emitToUser) emitToUser(item.listing.seller_id, 'notification', { message: msg });
 
       // 3.3 ⭐️ สร้าง Notification ลง DB (ส่งหาเกษตรกร)
       const notif = await Notifications.create({

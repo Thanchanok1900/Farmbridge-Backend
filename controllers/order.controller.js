@@ -1,6 +1,7 @@
 // controllers/order.controller.js
 const db = require('../models');
 const { Op } = require('sequelize');
+const { haversineDistance } = require('../utils/distance'); 
 
 // Models
 const Orders = db.Orders;
@@ -10,83 +11,102 @@ const Farmers = db.Farmers;
 const Notifications = db.Notifications;
 const PriceHistory = db.PriceHistory;
 
-// 1. (Buyer) สร้างออเดอร์ใหม่(Frontend จะเรียก API นี้ "หลังจาก" หน่วงเวลา 5 วินาที ฟีลๆแกล้งๆโหลด 5 วินาที เพื่อจำลองการจ่ายเงิน)
+// 1. (Buyer) สร้างออเดอร์ใหม่
 exports.createOrder = async (req, res) => {
-  
   const { listing_id, quantity, pickup_slot } = req.body;
-  const buyer_id = req.identity.id; // มาจาก authenticateToken
+  const buyer_id = req.identity.id;
 
-  // ตรวจสอบ Input
   if (!listing_id || !quantity || !pickup_slot) {
     return res.status(400).json({ message: 'ข้อมูลไม่ครบถ้วน (listing_id, quantity, pickup_slot)' });
   }
 
   try {
-    
     const listing = await Listings.findByPk(listing_id);
+    if (!listing) return res.status(404).json({ message: 'ไม่พบสินค้า' });
 
-    if (!listing) {
-      return res.status(404).json({ message: 'ไม่พบสินค้า' });
-    }
     if (listing.status !== 'available') {
       return res.status(400).json({ message: 'สินค้านี้ขายไปแล้ว' });
     }
-    
-    //  ตรวจสอบสต็อก
+
     if (parseFloat(listing.quantity_available) < parseFloat(quantity)) {
-      return res.status(400).json({ message: `สินค้ามีไม่เพียงพอ (เหลือ: ${listing.quantity_available})` });
+      return res.status(400).json({
+        message: `สินค้ามีไม่เพียงพอ (เหลือ: ${listing.quantity_available})`
+      });
     }
 
-    //  คำนวณราคา
+    // คำนวณราคา
     const total_price = parseFloat(listing.price_per_unit) * parseFloat(quantity);
-    
-    // "จ่ายเงิน(จำลอง)สำเร็จแล้ว" -> เริ่มทำงานตัดสต็อก
+
     const t = await db.sequelize.transaction();
+
     try {
-     //ล็อคแถวข้อมูลและตัดสต็อก
-      const lockedListing = await Listings.findByPk(listing_id, { transaction: t, lock: t.LOCK.UPDATE });
-      
+      const lockedListing = await Listings.findByPk(
+        listing_id,
+        { transaction: t, lock: t.LOCK.UPDATE }
+      );
+
       const newQuantity = parseFloat(lockedListing.quantity_available) - parseFloat(quantity);
-      
+
       await lockedListing.update({
         quantity_available: newQuantity,
         status: newQuantity <= 0 ? 'sold_out' : 'available',
-        updated_at: new Date() // (อัปเดตเวลาด้วย)
+        updated_at: new Date()
       }, { transaction: t });
 
-      // สร้างรหัสรับสินค้า (สุ่ม 6 ตัว)
+      // สร้างรหัสรับสินค้า
       const confirmation_code = Math.random().toString(36).substring(2, 8).toUpperCase();
 
-      //  สร้างออเดอร์
+      // สร้างออเดอร์
       const order = await Orders.create({
-        listing_id: listing_id,
-        buyer_id: buyer_id,
+        listing_id,
+        buyer_id,
         seller_id: lockedListing.seller_id,
         quantity_ordered: quantity,
-        total_price: total_price,
+        total_price,
         status: 'Processing',
-        confirmation_code: confirmation_code,
-        pickup_slot: pickup_slot
-        
+        confirmation_code,
+        pickup_slot
       }, { transaction: t });
 
-      // สร้างการแจ้งเตือนไปหาเกษตรกร
-      const seller = await Farmers.findByPk(lockedListing.seller_id);
+      // ===============================
+      // ⭐ คำนวณระยะทาง Buyer ↔ Farmer
+      // ===============================
+
+      const buyer = await Buyers.findByPk(buyer_id);
+      const farmer = await Farmers.findByPk(lockedListing.seller_id);
+
+      let distance_km = null;
+
+      if (buyer?.location_geom && farmer?.location_geom) {
+        distance_km = haversineDistance(
+          buyer.location_geom.coordinates[1],
+          buyer.location_geom.coordinates[0],
+          farmer.location_geom.coordinates[1],
+          farmer.location_geom.coordinates[0]
+        );
+      }
+
+      // สร้าง notification
       const message = `คุณมียอดสั่งซื้อ: ${lockedListing.product_name} จำนวน ${quantity} (รหัส ${confirmation_code})`;
-      
+
       await Notifications.create({
         user_id: listing.seller_id,
         type: 'sale',
-        message: message,
-        related_id: order.id
+        message,
+        related_id: order.id,
+        meta: { distance_km }   // ⭐ เพิ่มตรงนี้
       }, { transaction: t });
 
-      // (ส่วน Real-time/FCM)
+      // FCM / Real-time (ไม่แก้)
+      const seller = farmer;
       const emitToUser = req.app.locals.emitToUser;
       const admin = req.app.locals.firebaseAdmin;
-      const pushed = emitToUser ? emitToUser(listing.seller_id, 'notification', { message, orderId: order.id }) : false;
-      
-      if (!pushed && admin && seller && seller.device_token) {
+
+      const pushed = emitToUser
+        ? emitToUser(listing.seller_id, 'notification', { message, orderId: order.id })
+        : false;
+
+      if (!pushed && admin && seller?.device_token) {
         try {
           await admin.messaging().send({
             token: seller.device_token,
@@ -95,9 +115,9 @@ exports.createOrder = async (req, res) => {
           });
         } catch (e) { console.error('FCM send failed', e); }
       }
-      
+
       await t.commit();
-      res.status(201).json({ message: 'สั่งซื้อสำเร็จ!', order: order });
+      res.status(201).json({ message: 'สั่งซื้อสำเร็จ!', order });
 
     } catch (dbErr) {
       await t.rollback();
