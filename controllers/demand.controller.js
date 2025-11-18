@@ -121,6 +121,15 @@ exports.createDemand = async (req, res) => {
       if (price) {
         msg += ` ราคา ${price} บ. (คุณขาย ${item.listing.price_per_unit} บ.)`;
       }
+      
+      await Notifications.create({
+        user_id: item.listing.seller_id,
+        type: 'match',
+        message: sellerMsg,
+        related_id: demand.id,
+        meta: { distance_km: item.distance_km }
+      });
+      if (emitToUser) emitToUser(item.listing.seller_id, 'notification', { message: sellerMsg });
 
       // 3.3 ⭐️ สร้าง Notification ลง DB (ส่งหาเกษตรกร)
       const notif = await Notifications.create({
