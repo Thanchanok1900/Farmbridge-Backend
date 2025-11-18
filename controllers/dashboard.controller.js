@@ -70,7 +70,6 @@ exports.getImpactDashboard = async (req, res) => {
       };
     }
 
-
     // 5. บันทึก metrics ลง dashboard_metrics
     await DashboardMetrics.create({
       farmer_id,
