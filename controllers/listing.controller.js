@@ -5,6 +5,7 @@ const { geocodeAddress } = require('../utils/geocode');
 const { Op } = require('sequelize');
 // ตรวจสอบ path ให้ถูกว่าไฟล์ distance.js อยู่ที่ไหน
 const { haversineDistance } = require('../utils/distance'); 
+const { sendEmail } = require('../utils/email');
 
 const allowedProducts = ['มะม่วง', 'มังคุด', 'ทุเรียน', 'องุ่น'];
 const allowedGrades = ['เกรด B', 'เกรด C', 'เกรดต่ำกว่า C'];
@@ -148,6 +149,7 @@ exports.create = async (req, res) => {
 
     // 4.2 วนลูปเพื่อเช็ก "ราคา" และคำนวณ "ระยะทาง"
     for (const d of demands) {
+      const buyerProfile = await db.Buyers.findByPk(d.buyer_id);
       
       // ✅ เช็กเงื่อนไขราคา (บวกลบไม่เกิน 5 บาท)
       if (d.desired_price) {
@@ -170,11 +172,8 @@ exports.create = async (req, res) => {
       // หาพิกัดผู้ซื้อ (จาก Demand หรือ Profile)
       if (d.location_geom) {
          buyerCoords = { lat: d.location_geom.coordinates[1], lng: d.location_geom.coordinates[0] };
-      } else {
-         const buyer = await db.Buyers.findByPk(d.buyer_id);
-         if (buyer && buyer.location_geom) {
-            buyerCoords = { lat: buyer.location_geom.coordinates[1], lng: buyer.location_geom.coordinates[0] };
-         }
+      } else if (buyerProfile && buyerProfile.location_geom) {
+         buyerCoords = { lat: buyerProfile.location_geom.coordinates[1], lng: buyerProfile.location_geom.coordinates[0] };
       }
 
       if (buyerCoords && location_geom) {
@@ -184,7 +183,7 @@ exports.create = async (req, res) => {
         );
       }
 
-      notifyList.push({ demand: d, distance_km });
+      notifyList.push({ demand: d, distance_km, buyer: buyerProfile });
     }
 
     // เรียงลำดับ (ใกล้สุดขึ้นก่อน)
@@ -229,6 +228,15 @@ exports.create = async (req, res) => {
            message: msg,
            related_id: listing.id,
            distance_km: item.distance_km
+        });
+      }
+
+      const buyerEmail = item.buyer?.email;
+      if (buyerEmail) {
+        sendEmail({
+          to: buyerEmail,
+          subject: `พบสินค้า ${product_name} ที่ตรงกับคำขอของคุณ`,
+          text: msg
         });
       }
     }
