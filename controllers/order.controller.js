@@ -2,6 +2,7 @@
 const db = require('../models');
 const { Op } = require('sequelize');
 const { haversineDistance } = require('../utils/distance'); 
+const { sendEmail } = require('../utils/email');
 
 // Models
 const Orders = db.Orders;
@@ -10,11 +11,15 @@ const Buyers = db.Buyers;
 const Farmers = db.Farmers;
 const Notifications = db.Notifications;
 const PriceHistory = db.PriceHistory;
-const { sendEmail } = require('../utils/email');
 
-// 1. (Buyer) สร้างออเดอร์ใหม่
+// 1. (Buyer) สร้างออเดอร์ใหม่ (แบบไม่ใช้ Transaction)
 exports.createOrder = async (req, res) => {
   const { listing_id, quantity, pickup_slot } = req.body;
+  
+  // ป้องกัน Error กรณีไม่มี identity
+  if (!req.identity || !req.identity.id) {
+      return res.status(401).json({ message: 'Unauthorized' });
+  }
   const buyer_id = req.identity.id;
 
   if (!listing_id || !quantity || !pickup_slot) {
@@ -22,6 +27,7 @@ exports.createOrder = async (req, res) => {
   }
 
   try {
+    // 1. หาสินค้า
     const listing = await Listings.findByPk(listing_id);
     if (!listing) return res.status(404).json({ message: 'ไม่พบสินค้า' });
 
@@ -29,119 +35,109 @@ exports.createOrder = async (req, res) => {
       return res.status(400).json({ message: 'สินค้านี้ขายไปแล้ว' });
     }
 
-    if (parseFloat(listing.quantity_available) < parseFloat(quantity)) {
+    // 2. เช็คสต็อก
+    const currentQty = parseFloat(listing.quantity_available);
+    const orderQty = parseFloat(quantity);
+
+    if (currentQty < orderQty) {
       return res.status(400).json({
-        message: `สินค้ามีไม่เพียงพอ (เหลือ: ${listing.quantity_available})`
+        message: `สินค้ามีไม่เพียงพอ (เหลือ: ${currentQty})`
       });
     }
 
-    // คำนวณราคา
-    const total_price = parseFloat(listing.price_per_unit) * parseFloat(quantity);
+    // 3. คำนวณราคา
+    const total_price = parseFloat(listing.price_per_unit) * orderQty;
 
-    const t = await db.sequelize.transaction();
+    // 4. ตัดสต็อก (Update Listing)
+    const newQuantity = currentQty - orderQty;
+    await listing.update({
+      quantity_available: newQuantity,
+      status: newQuantity <= 0 ? 'sold_out' : 'available',
+      updated_at: new Date()
+    });
 
+    // 5. สร้างรหัสรับสินค้า
+    const confirmation_code = Math.random().toString(36).substring(2, 8).toUpperCase();
+
+    // 6. สร้างออเดอร์
+    const order = await Orders.create({
+      listing_id,
+      buyer_id,
+      seller_id: listing.seller_id,
+      quantity_ordered: orderQty,
+      total_price,
+      status: 'Processing',
+      confirmation_code,
+      pickup_slot
+    });
+
+    // ===============================
+    // ⭐ คำนวณระยะทาง Buyer ↔ Farmer
+    // ===============================
+    let distance_km = null;
     try {
-      const lockedListing = await Listings.findByPk(
-        listing_id,
-        { transaction: t, lock: t.LOCK.UPDATE }
-      );
+        const buyer = await Buyers.findByPk(buyer_id);
+        const farmer = await Farmers.findByPk(listing.seller_id);
 
-      const newQuantity = parseFloat(lockedListing.quantity_available) - parseFloat(quantity);
+        if (buyer?.location_geom && farmer?.location_geom) {
+            distance_km = haversineDistance(
+            buyer.location_geom.coordinates[1],
+            buyer.location_geom.coordinates[0],
+            farmer.location_geom.coordinates[1],
+            farmer.location_geom.coordinates[0]
+            );
+        }
+    } catch (distErr) {
+        console.log("Distance cal error:", distErr.message);
+    }
 
-      await lockedListing.update({
-        quantity_available: newQuantity,
-        status: newQuantity <= 0 ? 'sold_out' : 'available',
-        updated_at: new Date()
-      }, { transaction: t });
+    // 7. สร้าง Notification
+    const message = `คุณมียอดสั่งซื้อ: ${listing.product_name} จำนวน ${quantity} (รอรับรหัสจากผู้ซื้อ)`;
+    
+    await Notifications.create({
+      user_id: listing.seller_id,
+      type: 'sale',
+      message,
+      related_id: order.id,
+      meta: { distance_km }
+    });
 
-      // สร้างรหัสรับสินค้า
-      const confirmation_code = Math.random().toString(36).substring(2, 8).toUpperCase();
+    // 8. Real-time & Email (ทำให้เป็น Async ไม่ต้องรอ)
+    const emitToUser = req.app.locals.emitToUser;
+    const admin = req.app.locals.firebaseAdmin;
 
-      // สร้างออเดอร์
-      const order = await Orders.create({
-        listing_id,
-        buyer_id,
-        seller_id: lockedListing.seller_id,
-        quantity_ordered: quantity,
-        total_price,
-        status: 'Processing',
-        confirmation_code,
-        pickup_slot
-      }, { transaction: t });
+    if (emitToUser) {
+        emitToUser(listing.seller_id, 'notification', { message, orderId: order.id });
+    }
 
-      // ===============================
-      // ⭐ คำนวณระยะทาง Buyer ↔ Farmer
-      // ===============================
-
-      const buyer = await Buyers.findByPk(buyer_id);
-      const farmer = await Farmers.findByPk(lockedListing.seller_id);
-
-      const seller = farmer;
-
-      let distance_km = null;
-
-      if (buyer?.location_geom && farmer?.location_geom) {
-        distance_km = haversineDistance(
-          buyer.location_geom.coordinates[1],
-          buyer.location_geom.coordinates[0],
-          farmer.location_geom.coordinates[1],
-          farmer.location_geom.coordinates[0]
-        );
-      }
-
-      // สร้าง notification
-      const message = `คุณมียอดสั่งซื้อ: ${lockedListing.product_name} จำนวน ${quantity} (รหัส ${confirmation_code})`;
-      const sellerEmailPayload = seller && seller.email ? {
-        to: seller.email,
-        subject: 'คุณมีคำสั่งซื้อใหม่บน Farmbridge',
-        text: message
-      } : null;
-
-      await Notifications.create({
-        user_id: listing.seller_id,
-        type: 'sale',
-        message,
-        related_id: order.id,
-        meta: { distance_km }   // ⭐ เพิ่มตรงนี้
-      }, { transaction: t });
-
-      // FCM / Real-time (ไม่แก้)
-      
-      const emitToUser = req.app.locals.emitToUser;
-      const admin = req.app.locals.firebaseAdmin;
-
-      await t.commit();
-
-      const pushed = emitToUser
-        ? emitToUser(listing.seller_id, 'notification', { message, orderId: order.id })
-        : false;
-
-      if (!pushed && admin && seller?.device_token) {
+    // ส่ง FCM Notification
+    (async () => {
         try {
-          await admin.messaging().send({
-            token: seller.device_token,
-            notification: { title: 'คุณขายของได้แล้ว!', body: message },
-            data: { type: 'order', order_id: String(order.id) }
-          });
-        } catch (e) { console.error('FCM send failed', e); }
-      }
+            const seller = await Farmers.findByPk(listing.seller_id);
+            if (admin && seller?.device_token) {
+                await admin.messaging().send({
+                    token: seller.device_token,
+                    notification: { title: 'คุณขายของได้แล้ว!', body: message },
+                    data: { type: 'order', order_id: String(order.id) }
+                });
+            }
+            if (seller && seller.email) {
+                 sendEmail({
+                    to: seller.email,
+                    subject: 'คุณมีคำสั่งซื้อใหม่บน Farmbridge',
+                    text: message
+                });
+            }
+        } catch (e) {
+            console.error('Notification Async Error:', e.message);
+        }
+    })();
 
-      await t.commit();
+    // ส่ง Response กลับทันที
+    res.status(201).json({ message: 'สั่งซื้อสำเร็จ!', order: order });
 
-      if (sellerEmailPayload) {
-        sendEmail(sellerEmailPayload);
-      }
-      res.status(201).json({ message: 'สั่งซื้อสำเร็จ!', order: order });
-
-    } catch (dbErr) {
-      if (!t.finished) {
-      await t.rollback();
-    }
-      console.error('DB Error after payment:', dbErr);
-      res.status(500).json({ message: 'สร้างออเดอร์ล้มเหลว (DB Error)', error: dbErr.message });
-    }
   } catch (err) {
-    console.error(err);
+    console.error("Create Order Error:", err);
     res.status(500).json({ message: 'การสั่งซื้อล้มเหลว', error: err.message });
   }
 };
@@ -169,8 +165,6 @@ exports.confirmPickup = async (req, res) => {
     if (order.confirmation_code !== confirmation_code.trim().toUpperCase()) {
       return res.status(400).json({ message: 'รหัสรับสินค้าไม่ถูกต้อง' });
     }
-    
-    // (PoC) "การโอนเงิน" เข้าบัญชีเกษตรกร เกิดขึ้นที่นี่...
     
     await order.update({ 
       status: 'Completed',
@@ -212,7 +206,7 @@ exports.confirmPickup = async (req, res) => {
   }
 };
 
-//3. (Buyer) ดึงประวัติการซื้อของฉัน
+// 3. (Buyer) ดึงประวัติการซื้อของฉัน
 exports.getPurchaseHistory = async (req, res) => {
   try {
     const orders = await Orders.findAll({

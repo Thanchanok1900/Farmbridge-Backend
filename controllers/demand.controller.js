@@ -9,27 +9,38 @@ const { geocodeAddress } = require('../utils/geocode');
 const { haversineDistance } = require('../utils/distance');
 const { sendEmail } = require('../utils/email');
 
-// 1. สร้างความต้องการใหม่ (และจับคู่แจ้งเตือนเกษตรกร)
+// 1. สร้างความต้องการใหม่ (และจับคู่แจ้งเตือนเกษตรกร + แจ้งเตือนตัวเองถ้าเจอ)
 exports.createDemand = async (req, res) => {
   try {
+    if (!req.identity || !req.identity.id) {
+      return res.status(401).json({ message: 'Unauthorized' });
+    }
+
     const buyer_id = req.identity.id;
     const { product_name, desired_quantity, unit, desired_price } = req.body;
 
-    // Validation
     if (!product_name || !desired_quantity || !unit) {
       return res.status(400).json({ message: 'กรุณาระบุข้อมูลให้ครบ' });
     }
 
     const qty = parseFloat(desired_quantity);
-    const price = desired_price ? parseFloat(desired_price) : null;
+    let price = null;
+    if (desired_price !== undefined && desired_price !== null && desired_price !== '') {
+        price = parseFloat(desired_price);
+    }
 
     // ดึงข้อมูลผู้ซื้อ (เพื่อเอาพิกัด)
-    const buyer = await db.Buyers.findByPk(buyer_id);
     let location_geom = null;
-    if (buyer && buyer.address) {
-      const coords = await geocodeAddress(buyer.address);
-      if (coords)
-        location_geom = { type: 'Point', coordinates: [coords.lng, coords.lat] };
+    try {
+      const buyer = await db.Buyers.findByPk(buyer_id);
+      if (buyer && buyer.address) {
+        const coords = await geocodeAddress(buyer.address);
+        if (coords) {
+          location_geom = { type: 'Point', coordinates: [coords.lng, coords.lat] };
+        }
+      }
+    } catch (geoErr) {
+      console.log("Geocode warning:", geoErr.message);
     }
 
     // 1. บันทึก Demand ลง Database
@@ -44,14 +55,13 @@ exports.createDemand = async (req, res) => {
     });
 
     // -------------------------------------------------------------
-    // 🎯 2. Matching Logic (จับคู่กับ Listing ที่มีอยู่)
+    // 🎯 2. Matching Logic
     // -------------------------------------------------------------
 
-    // 2.1 หา Listing ที่ "ชื่อตรงกัน" และ "มีของพอ" (Listing >= Demand)
     const listings = await Listings.findAll({
       where: {
         product_name: product_name,
-        quantity_available: { [Op.gte]: qty }, // ของที่มี >= ของที่อยากได้
+        quantity_available: { [Op.gte]: qty },
         status: 'available'
       },
       include: [
@@ -62,18 +72,12 @@ exports.createDemand = async (req, res) => {
     const notifyList = [];
 
     for (const l of listings) {
-      // ✅ 2.2 เช็กราคา (บวกลบไม่เกิน 5 บาท)
-      if (price) { // ถ้าผู้ซื้อระบุราคามา
+      if (price !== null) { 
         const sellerPrice = parseFloat(l.price_per_unit);
         const diff = Math.abs(sellerPrice - price);
-
-        // ถ้าห่างกันเกิน 5 บาท -> ข้าม (ไม่แจ้งเตือนเกษตรกรคนนี้)
-        if (diff > 5) {
-          continue;
-        }
+        if (diff > 5) continue; 
       }
 
-      // 2.3 คำนวณระยะทาง
       let listingCoords = null;
       if (l.location_geom) {
         listingCoords = {
@@ -95,14 +99,14 @@ exports.createDemand = async (req, res) => {
       notifyList.push({ listing: l, distance_km });
     }
 
-    // เรียงลำดับตามระยะทาง (ใกล้สุดขึ้นก่อน)
+    // เรียงลำดับตามระยะทาง
     notifyList.sort((a, b) => {
       if (a.distance_km === null) return 1;
       if (b.distance_km === null) return -1;
       return a.distance_km - b.distance_km;
     });
 
-    // 3. ส่งแจ้งเตือนหา "เกษตรกร"
+    // 3. Loop แจ้งเตือน
     const emitToUser = req.app.locals.emitToUser;
 
     for (const item of notifyList) {
@@ -115,47 +119,60 @@ exports.createDemand = async (req, res) => {
         status: 'pending'
       });
 
-      // 3.2 สร้างข้อความ (ใส่ราคาและระยะทาง)
-      let msg = `มีผู้ซื้อต้องการ ${product_name} จำนวน ${qty} ${unit}`;
-      if (item.distance_km !== null) msg += ` ห่าง ${item.distance_km.toFixed(1)} กม.`;
-      if (price) {
-        msg += ` ราคา ${price} บ. (คุณขาย ${item.listing.price_per_unit} บ.)`;
-      }
-      
-      await Notifications.create({
+      // -------------------------------------------------------
+      // 🔔 แจ้งเตือนฝั่ง "เกษตรกร" (Seller)
+      // -------------------------------------------------------
+      let sellerMsg = `มีผู้ซื้อต้องการ ${product_name} จำนวน ${qty} ${unit}`;
+      if (item.distance_km !== null) sellerMsg += ` ห่าง ${item.distance_km.toFixed(1)} กม.`;
+      if (price !== null) sellerMsg += ` ราคา ${price} บ.`;
+
+      const notifSeller = await Notifications.create({
         user_id: item.listing.seller_id,
         type: 'match',
         message: sellerMsg,
         related_id: demand.id,
         meta: { distance_km: item.distance_km }
       });
-      if (emitToUser) emitToUser(item.listing.seller_id, 'notification', { message: sellerMsg });
 
-      // 3.3 ⭐️ สร้าง Notification ลง DB (ส่งหาเกษตรกร)
-      const notif = await Notifications.create({
-        user_id: item.listing.seller_id, // ส่งหา Seller
-        type: 'match',
-        message: msg,
-        related_id: demand.id, // ⭐️ ลิงก์มาที่ Demand นี้ เพื่อให้เกษตรกรกดดูรายละเอียด
-        meta: { distance_km: item.distance_km }
-      });
-
-      // 3.4 Realtime
       if (emitToUser) {
         emitToUser(item.listing.seller_id, 'notification', {
-          id: notif.id,
-          message: msg,
+          id: notifSeller.id,
+          message: sellerMsg,
           demand_id: demand.id,
           distance_km: item.distance_km
         });
       }
-
+      
+      // ส่งอีเมลหาเกษตรกร
       const sellerEmail = item.listing.seller?.email;
       if (sellerEmail) {
         sendEmail({
           to: sellerEmail,
           subject: `มีผู้ต้องการ ${product_name} ใกล้คุณ`,
-          text: msg
+          text: sellerMsg
+        }).catch(e => console.log("Email error:", e.message));
+      }
+
+      // -------------------------------------------------------
+      // 🔔 ✅ เพิ่มใหม่: แจ้งเตือนฝั่ง "ผู้ซื้อ" (Buyer - ตัวเราเอง)
+      // -------------------------------------------------------
+      let buyerMsg = `เจอสินค้าแล้ว! ${product_name} ของ ${item.listing.seller.fullname}`;
+      buyerMsg += ` ราคา ${item.listing.price_per_unit} บาท`;
+      
+      const notifBuyer = await Notifications.create({
+        user_id: buyer_id, // ส่งให้ตัวเอง
+        type: 'match',
+        message: buyerMsg,
+        related_id: item.listing.id, // คลิกแล้วไปดู Listing ของเขา
+        meta: { distance_km: item.distance_km }
+      });
+
+      if (emitToUser) {
+        emitToUser(buyer_id, 'notification', {
+          id: notifBuyer.id,
+          message: buyerMsg,
+          related_id: item.listing.id,
+          distance_km: item.distance_km
         });
       }
     }
@@ -163,12 +180,12 @@ exports.createDemand = async (req, res) => {
     res.status(201).json({ message: 'Demand created successfully', demand });
 
   } catch (err) {
-    console.error(err);
+    console.error("Create Demand Critical Error:", err);
     res.status(500).json({ message: 'Create demand failed', error: err.message });
   }
 };
 
-// 2. ดึงความต้องการทั้งหมดของผู้ซื้อ
+// ... (ฟังก์ชันอื่นๆ getDemandsByBuyer, getProductOptions, deleteDemand คงเดิม)
 exports.getDemandsByBuyer = async (req, res) => {
   try {
     const buyer_id = req.identity.id;
@@ -182,7 +199,6 @@ exports.getDemandsByBuyer = async (req, res) => {
   }
 };
 
-// 3. ดึงตัวเลือกสินค้าจาก Listings (สำหรับ Dropdown)
 exports.getProductOptions = async (req, res) => {
   try {
     const products = await db.Listings.findAll({
@@ -200,15 +216,12 @@ exports.getProductOptions = async (req, res) => {
   }
 };
 
-// 4. ลบความต้องการ
 exports.deleteDemand = async (req, res) => {
   try {
     const { id } = req.params;
     const demand = await Demands.findByPk(id);
     if (!demand) return res.status(404).json({ message: 'Demand not found' });
-
     if (demand.buyer_id !== req.identity.id) return res.status(403).json({ message: 'Not allowed' });
-
     await demand.destroy();
     res.json({ message: 'Demand deleted' });
   } catch (err) {
