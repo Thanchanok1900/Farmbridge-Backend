@@ -135,6 +135,15 @@ exports.getProfile = async (req, res) => {
     if (!user) {
       return res.status(404).json({ message: 'User not found' });
     }
+
+    let coordinates = null;
+    if (user.location_geom && user.location_geom.coordinates) {
+        coordinates = {
+            lng: user.location_geom.coordinates[0],
+            lat: user.location_geom.coordinates[1]
+        };
+    }
+
     res.json({
       id: user.id,
       fullname: user.fullname,
@@ -142,6 +151,7 @@ exports.getProfile = async (req, res) => {
       phone: user.phone,
       address: user.address,
       role: req.identity.role,
+      coordinates: coordinates,
       
       ...(req.identity.role === 'farmer' && { farmer_doc_url: user.farmer_doc_url })
     });

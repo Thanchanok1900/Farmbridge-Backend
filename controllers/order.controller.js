@@ -76,6 +76,8 @@ exports.createOrder = async (req, res) => {
       const buyer = await Buyers.findByPk(buyer_id);
       const farmer = await Farmers.findByPk(lockedListing.seller_id);
 
+      const seller = farmer;
+
       let distance_km = null;
 
       if (buyer?.location_geom && farmer?.location_geom) {
@@ -104,9 +106,11 @@ exports.createOrder = async (req, res) => {
       }, { transaction: t });
 
       // FCM / Real-time (ไม่แก้)
-      const seller = farmer;
+      
       const emitToUser = req.app.locals.emitToUser;
       const admin = req.app.locals.firebaseAdmin;
+
+      await t.commit();
 
       const pushed = emitToUser
         ? emitToUser(listing.seller_id, 'notification', { message, orderId: order.id })
@@ -130,7 +134,9 @@ exports.createOrder = async (req, res) => {
       res.status(201).json({ message: 'สั่งซื้อสำเร็จ!', order: order });
 
     } catch (dbErr) {
+      if (!t.finished) {
       await t.rollback();
+    }
       console.error('DB Error after payment:', dbErr);
       res.status(500).json({ message: 'สร้างออเดอร์ล้มเหลว (DB Error)', error: dbErr.message });
     }

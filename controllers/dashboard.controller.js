@@ -34,7 +34,7 @@ exports.getImpactDashboard = async (req, res) => {
     const totalTransactions = orders.length;
 
     // 3. หา latest order
-    const latestOrder = orders.length > 0 ? orders[0] : null;
+    //const latestOrder = orders.length > 0 ? orders[0] : null;
 
     // 4. เปรียบเทียบราคาขายให้พ่อค้าคนกลาง
     let revenueFromMiddlemen = 0;
@@ -54,6 +54,14 @@ exports.getImpactDashboard = async (req, res) => {
     const increasePercent = revenueFromMiddlemen > 0
       ? Number(((totalRevenue - revenueFromMiddlemen) / revenueFromMiddlemen * 100).toFixed(2))
       : 0;
+
+      const salesHistory = orders.map(o => ({
+        product_name: o.Listing?.product_name || 'สินค้าไม่ระบุ',
+        grade: o.Listing?.grade || '-',
+        quantity: Number(o.quantity_ordered),
+        total_price: Number(o.total_price),
+        date: o.created_at
+    }));
 
     console.log('💰 Revenue:', { totalRevenue, revenueFromMiddlemen, increasePercent });
 
@@ -112,11 +120,7 @@ exports.getImpactDashboard = async (req, res) => {
         totalRevenue,
         totalTransactions,
         increasePercent,
-        latestSale: latestOrder ? {
-          product_name: latestOrder.Listing?.product_name || 'Unknown',
-          grade: latestOrder.Listing?.grade || '-',
-          quantity: latestOrder.quantity_ordered || 0
-        } : null
+        salesHistory
       },
       priceTrends
     };

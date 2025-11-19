@@ -31,6 +31,10 @@ exports.getAll = async (req, res) => {
 
     const rows = await Listings.findAll({
       where,
+      attributes: [
+          'id', 'product_name', 'price_per_unit', 'unit', 
+          'grade', 'image_url', 'status', 'location_geom', 'created_at' 
+      ],
       include: [
         { model: Farmers, as: 'seller', attributes: ['id', 'fullname', 'email', 'phone', 'address'] }
       ],
